@@ -1,0 +1,542 @@
+// ==UserScript==
+// @name         Quan Ly SKCD - Fill All Forms (Complete + Hành Chính)
+// @namespace    https://quanlyskcd.medinet.org.vn/
+// @version      4.2
+// @description  Floating automation buttons for KSK Nhi Khoa, Tiêm chủng, Tai-Mũi-Họng, and Hành Chính forms
+// @author       Antigravity
+// @match        *://quanlyskcd.medinet.org.vn/*
+// @match        *://*.medinet.org.vn/*
+// @include      *://quanlyskcd.medinet.org.vn/*
+// @include      *://*.medinet.org.vn/*
+// @allFrames    true
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // Section 1 (Nhi khoa) body systems
+  const SECTIONS = ['TuanHoan', 'HoHap', 'TieuHoa', 'ThanTietNieu', 'NoiTiet', 'TamThan'];
+  const CLASSIFICATION_OVERRIDE = { NoiTiet: 'ThanKinh' };
+
+  function getJQuery() {
+    return window.jQuery || window.$ || (typeof unsafeWindow !== 'undefined' ? (unsafeWindow.jQuery || unsafeWindow.$) : null);
+  }
+
+  /**
+   * Safe multi-method lookup for DevExtreme widget instances
+   */
+  function getDxWidgetInstance(el, widgetName) {
+    if (!el) return null;
+    const $ = getJQuery();
+
+    // 1. jQuery plugin method
+    try {
+      if ($ && typeof $(el)[widgetName] === 'function') {
+        const inst = $(el)[widgetName]('instance');
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 2. DevExpress global API
+    try {
+      const DevExpress = window.DevExpress || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.DevExpress : null);
+      if (DevExpress && DevExpress.ui && DevExpress.ui[widgetName]) {
+        const inst = DevExpress.ui[widgetName].getInstance(el);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 3. jQuery data attribute
+    try {
+      if ($) {
+        const inst = $(el).data(widgetName);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  /* ==========================================================================
+     SECTION 1: KSK NHI KHOA FORM AUTOMATION
+     ========================================================================== */
+
+  function processCheckbox(containerEl) {
+    if (!containerEl) return false;
+    const chkEl = containerEl.classList.contains('dx-checkbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-checkbox') || containerEl);
+
+    const inst = getDxWidgetInstance(chkEl, 'dxCheckBox');
+
+    if (inst) {
+      try {
+        if (inst.option('value') !== true) {
+          inst.option('value', true);
+        }
+      } catch (e) {
+        console.warn('[Fill all] Checkbox option set error:', e);
+      }
+    }
+
+    const icon = chkEl.querySelector('.dx-checkbox-icon') || chkEl;
+    const isChecked = chkEl.classList.contains('dx-checkbox-checked') || (inst && inst.option('value') === true);
+    if (!isChecked && icon) {
+      icon.click();
+    }
+    return true;
+  }
+
+  function processList(containerEl) {
+    if (!containerEl) return false;
+    const listEl = containerEl.classList.contains('dx-list')
+      ? containerEl
+      : (containerEl.querySelector('.dx-list') || containerEl);
+
+    const inst = getDxWidgetInstance(listEl, 'dxList');
+    const items = listEl.querySelectorAll('.dx-list-item');
+    if (!items.length) return false;
+
+    let processed = false;
+    items.forEach((item, index) => {
+      const text = item.textContent.replace(/\s+/g, ' ').trim();
+      if (text === 'Loại I' || /^loại\s*i$/i.test(text)) {
+        if (inst) {
+          try {
+            inst.selectItem(index);
+            processed = true;
+          } catch (e) {
+            console.warn('[Fill all] List selectItem error:', e);
+          }
+        }
+
+        const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+        if (!isSelected) {
+          const target = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-item-content') || item;
+          target.click();
+        }
+        processed = true;
+      }
+    });
+
+    return processed;
+  }
+
+  function findElements(selector) {
+    const els = document.querySelectorAll(selector);
+    return els ? Array.from(els) : [];
+  }
+
+  function fillAll() {
+    let filledCount = 0;
+
+    SECTIONS.forEach(function (prefix) {
+      const chkContainers = findElements('.' + prefix + '_ChuaPhatHienBatThuong');
+      chkContainers.forEach(function (el) {
+        if (processCheckbox(el)) filledCount++;
+      });
+
+      const classPrefix = CLASSIFICATION_OVERRIDE[prefix] || prefix;
+      const listContainers = findElements('.' + classPrefix + '_PhanLoai');
+      listContainers.forEach(function (el) {
+        if (processList(el)) filledCount++;
+      });
+    });
+
+    const btn = document.getElementById('fillAllBtn');
+    if (btn) {
+      const origText = 'Fill all';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Filled ${filledCount} items`;
+        btn.style.background = '#059669';
+      } else {
+        btn.textContent = '⚠ No fields found';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#059669';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION 2: TAI - MŨI - HỌNG (HEARING + CHECKBOX + LOẠI I) AUTOMATION
+     ========================================================================== */
+
+  function setNumberBoxValue(containerEl, valueNum, valueStr) {
+    if (!containerEl) return false;
+    const numBoxEl = containerEl.classList.contains('dx-numberbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-numberbox') || containerEl);
+
+    const inst = getDxWidgetInstance(numBoxEl, 'dxNumberBox');
+    if (inst) {
+      try {
+        inst.option('value', valueNum);
+        return true;
+      } catch (e) {
+        console.warn('[Tai] NumberBox option set error:', e);
+      }
+    }
+
+    // DOM Fallback
+    const input = numBoxEl.querySelector('input.dx-texteditor-input');
+    if (input) {
+      input.value = valueStr;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function fillTaiHearing() {
+    let filledCount = 0;
+
+    // 1. Top Left: TMH_TaiTrai_NoiThuong -> 5
+    const topLeft = document.querySelector('.TMH_TaiTrai_NoiThuong, [class*="TaiTrai_NoiThuong" i]');
+    if (topLeft && setNumberBoxValue(topLeft, 5, '5')) filledCount++;
+
+    // 2. Bottom Left: TMH_TaiPhai_NoiThuong -> 5
+    const bottomLeft = document.querySelector('.TMH_TaiPhai_NoiThuong, [class*="TaiPhai_NoiThuong" i]');
+    if (bottomLeft && setNumberBoxValue(bottomLeft, 5, '5')) filledCount++;
+
+    // 3. Top Right: TMH_TaiTrai_NoiTham -> 0.5 ("0,5")
+    const topRight = document.querySelector('.TMH_TaiTrai_NoiTham, [class*="TaiTrai_NoiTham" i]');
+    if (topRight && setNumberBoxValue(topRight, 0.5, '0,5')) filledCount++;
+
+    // 4. Bottom Right: TMH_TaiPhai_NoiTham -> 0.5 ("0,5")
+    const bottomRight = document.querySelector('.TMH_TaiPhai_NoiTham, [class*="TaiPhai_NoiTham" i]');
+    if (bottomRight && setNumberBoxValue(bottomRight, 0.5, '0,5')) filledCount++;
+
+    // 5. Checkbox: TMH_ChuaPhatHienBatThuong -> "Chưa phát hiện bất thường"
+    const chkContainers = findElements('.TMH_ChuaPhatHienBatThuong');
+    chkContainers.forEach(function (el) {
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    // 6. Classification List: TMH_PhanLoai -> "Loại I"
+    const listContainers = findElements('.TMH_PhanLoai');
+    listContainers.forEach(function (el) {
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('btnTai');
+    if (btn) {
+      const origText = 'Tai';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Tai (${filledCount})`;
+        btn.style.background = '#0284c7';
+      } else {
+        btn.textContent = '⚠ Tai (0)';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#0284c7';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION 3: TIÊM CHỦNG (VACCINATION) AUTOMATION
+     ========================================================================== */
+
+  function fillVaccines(regexPattern) {
+    const radioGroups = document.querySelectorAll('.dx-radiogroup, .editorRadio');
+    let filledCount = 0;
+
+    radioGroups.forEach(groupEl => {
+      const inst = getDxWidgetInstance(groupEl, 'dxRadioGroup');
+      const radioBtns = groupEl.querySelectorAll('.dx-radiobutton');
+
+      radioBtns.forEach((btn, index) => {
+        const text = btn.textContent.replace(/\s+/g, ' ').trim();
+        if (regexPattern.test(text)) {
+          if (inst) {
+            try {
+              const items = inst.option('items');
+              if (items && items[index]) {
+                inst.option('value', items[index]);
+              } else {
+                inst.option('value', text);
+              }
+            } catch (e) {}
+          }
+
+          const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            const clickTarget = btn.querySelector('.dx-radiobutton-icon, .dx-radio-value-container, .dx-item-content') || btn;
+            clickTarget.click();
+          }
+          filledCount++;
+        }
+      });
+    });
+
+    return filledCount;
+  }
+
+  function handleVaccineClick(btnId, labelText, regexPattern) {
+    const count = fillVaccines(regexPattern);
+    const btn = document.getElementById(btnId);
+    if (btn) {
+      const origText = labelText;
+      if (count > 0) {
+        btn.textContent = `✓ ${labelText} (${count})`;
+      } else {
+        btn.textContent = `⚠ ${labelText} (0)`;
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     ==========================================================================
+     NEW SECTION: THÔNG TIN HÀNH CHÍNH (ADMINISTRATIVE QUICK FILL)
+     ==========================================================================
+     ========================================================================== */
+
+  // Exact Match Helper: Strips out asterisks and hidden text to find the exact DOM label
+  function getFieldContainerByLabel(labelText) {
+    const wrappers = document.querySelectorAll('.dx-template-wrapper');
+    for (let w of wrappers) {
+      const labelEl = w.querySelector('b');
+      if (labelEl) {
+        const cleanText = labelEl.textContent.replace(/\*/g, '').trim().toLowerCase();
+        if (cleanText === labelText.toLowerCase()) {
+          return w;
+        }
+      }
+    }
+    return null;
+  }
+
+  // "Smart Retry" Dropdown Selector: Handles Server Loading Delay
+  function simulateDropdownSelect(labelText, searchText, retries = 4) {
+    return new Promise(resolve => {
+      const targetContainer = getFieldContainerByLabel(labelText);
+      if (!targetContainer) {
+        console.warn(`[Hành chính] Không tìm thấy field: ${labelText}`);
+        return resolve(false);
+      }
+
+      const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox');
+      if (!widget) {
+        console.warn(`[Hành chính] Không tìm thấy dropdown cho: ${labelText}`);
+        return resolve(false);
+      }
+
+      // Open the dropdown to trigger the server fetch
+      const dropIcon = widget.querySelector('.dx-dropdowneditor-icon') || widget;
+      dropIcon.click();
+
+      let attempts = 0;
+
+      // Loop every 500ms waiting for the list items to load from the server
+      const interval = setInterval(() => {
+        attempts++;
+        // Find the active/visible DevExtreme popup overlay
+        const overlays = document.querySelectorAll('.dx-overlay-content:not(.dx-state-invisible)');
+        let found = false;
+
+        for (let overlay of overlays) {
+          const items = overlay.querySelectorAll('.dx-list-item');
+          for (let item of items) {
+            const text = item.textContent.replace(/\s+/g, ' ').trim().toLowerCase();
+            if (text.includes(searchText.toLowerCase())) {
+              item.click(); // Select the matched item
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+
+        // If found, clear loop and resolve
+        if (found) {
+          clearInterval(interval);
+          resolve(true);
+        }
+        // If max attempts reached, close the popup and move on
+        else if (attempts >= retries) {
+          clearInterval(interval);
+          dropIcon.click();
+          console.warn(`[Hành chính] Không tìm thấy option "${searchText}" trong dropdown ${labelText}`);
+          resolve(false);
+        }
+      }, 500);
+    });
+  }
+
+  // Checkbox & Radio Tick Helper
+  function simulateTick(labelText, optionText) {
+    const targetContainer = getFieldContainerByLabel(labelText);
+    if (!targetContainer) return false;
+
+    // 1. Try RadioGroup (e.g., Trẻ có đi học)
+    const radioGroup = targetContainer.querySelector('hradiogroup dx-radio-group, .dx-radiogroup');
+    if (radioGroup) {
+      const btns = radioGroup.querySelectorAll('.dx-radiobutton');
+      for (let btn of btns) {
+        if (btn.textContent.toLowerCase().includes(optionText.toLowerCase())) {
+          const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            const icon = btn.querySelector('.dx-radiobutton-icon') || btn;
+            icon.click();
+          }
+          return true;
+        }
+      }
+    }
+
+    // 2. Try List Selection Checkboxes (e.g., Hình thức chi trả / Hình thức khám)
+    const dxList = targetContainer.querySelector('hlistselection dx-list, .dx-list');
+    if (dxList) {
+      const items = dxList.querySelectorAll('.dx-list-item');
+      for (let item of items) {
+        if (item.textContent.toLowerCase().includes(optionText.toLowerCase())) {
+          const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+          if (!isSelected) {
+            const icon = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-select-radiobutton') || item;
+            icon.click();
+          }
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  // The Main Execution
+  async function fillHanhChinh() {
+    const btn = document.getElementById('btnHanhChinh');
+    if (btn) btn.textContent = '⏳ Đang điền...';
+
+    // 1. Independent Fields
+    await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
+    await simulateDropdownSelect('Địa điểm khám', 'Khám Lưu Động');
+    simulateTick('Hình thức chi trả khám sức khỏe', 'Ngân sách thành phố');
+    simulateTick('Hình thức khám', 'Khám theo hợp đồng');
+
+    // 2. Cascading Fields (Require precise timing)
+    simulateTick('Trẻ có đi học', 'Có');
+
+    // Wait 600ms for Angular to mount "Xã phường" container after ticking "Có"
+    setTimeout(async () => {
+      await simulateDropdownSelect('Xã phường', 'Thuận Giao');
+
+      // Wait another 600ms for "Trường" to become available after Xã phường is selected
+      setTimeout(async () => {
+        await simulateDropdownSelect('Trường', 'Đức Trí');
+
+        if (btn) {
+          btn.textContent = '✓ Hành chính';
+          btn.style.background = '#059669';
+          setTimeout(() => {
+            btn.textContent = 'Hành chính';
+            btn.style.background = '#8b5cf6';
+          }, 2500);
+        }
+      }, 600);
+    }, 600);
+  }
+
+  /* ==========================================================================
+     UI BUTTON BAR INJECTION
+     ========================================================================== */
+
+  function injectButtons() {
+    if (document.getElementById('automationPanel')) return;
+
+    const container = document.createElement('div');
+    container.id = 'automationPanel';
+    container.style.cssText = [
+      'position: fixed',
+      'top: 12px',
+      'right: 15px',
+      'z-index: 999999',
+      'display: flex',
+      'align-items: center',
+      'gap: 8px',
+      'font-family: system-ui, -apple-system, sans-serif'
+    ].join(';');
+
+    function createBtn(id, text, bg, onClick) {
+      const btn = document.createElement('button');
+      btn.id = id;
+      btn.textContent = text;
+      btn.style.cssText = [
+        `background: ${bg}`,
+        'color: #ffffff',
+        'border: none',
+        'border-radius: 6px',
+        'padding: 8px 14px',
+        'font-size: 13px',
+        'font-weight: 600',
+        'cursor: pointer',
+        'box-shadow: 0 4px 12px rgba(0,0,0,0.25)',
+        'transition: all 0.2s ease-in-out',
+        'white-space: nowrap'
+      ].join(';');
+
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'translateY(-2px)';
+        btn.style.boxShadow = '0 6px 16px rgba(0,0,0,0.35)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'translateY(0)';
+        btn.style.boxShadow = '0 4px 12px rgba(0,0,0,0.25)';
+      });
+
+      btn.addEventListener('click', onClick);
+      return btn;
+    }
+
+    // --- BUTTON FOR THÔNG TIN HÀNH CHÍNH ---
+    const btnHanhChinh = createBtn('btnHanhChinh', 'Hành chính', '#8b5cf6', fillHanhChinh);
+
+    // 1. Fill all (Section 1: KSK Nhi khoa)
+    const btnFillAll = createBtn('fillAllBtn', 'Fill all', '#059669', fillAll);
+
+    // 2. Tai (Tai - Mũi - Họng Hearing assessment + Checkbox + Loại I)
+    const btnTai = createBtn('btnTai', 'Tai', '#0284c7', fillTaiHearing);
+
+    // 3. Đã tiêm (Vaccination)
+    const btnDaTiem = createBtn('btnDaTiem', 'Đã tiêm', '#2563eb', () =>
+      handleVaccineClick('btnDaTiem', 'Đã tiêm', /^đã\s*tiêm/i)
+    );
+
+    // 4. Chưa tiêm (Vaccination)
+    const btnChuaTiem = createBtn('btnChuaTiem', 'Chưa tiêm', '#d97706', () =>
+      handleVaccineClick('btnChuaTiem', 'Chưa tiêm', /^chưa\s*tiêm/i)
+    );
+
+    // 5. Không nhớ rõ (Vaccination)
+    const btnKhongNhoRo = createBtn('btnKhongNhoRo', 'Không nhớ rõ', '#4b5563', () =>
+      handleVaccineClick('btnKhongNhoRo', 'Không nhớ rõ', /^không\s*nhớ\s*rõ/i)
+    );
+
+    // Append to container
+    container.appendChild(btnHanhChinh);
+    container.appendChild(btnFillAll);
+    container.appendChild(btnTai);
+    container.appendChild(btnDaTiem);
+    container.appendChild(btnChuaTiem);
+    container.appendChild(btnKhongNhoRo);
+
+    document.body.appendChild(container);
+  }
+
+  setInterval(injectButtons, 1000);
+})();
