@@ -1,0 +1,1235 @@
+// ==UserScript==
+// @name         Quan Ly SKCD - Fill All Forms TRẺ Em (v4.3)
+// @namespace    https://quanlyskcd.medinet.org.vn/
+// @version      5.2
+// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, M4, RHM, Cận Lâm Sàng JSON Importer with Comma Decimals)
+// @author       Antigravity
+// @match        *://quanlyskcd.medinet.org.vn/*
+// @match        *://*.medinet.org.vn/*
+// @include      *://quanlyskcd.medinet.org.vn/*
+// @include      *://*.medinet.org.vn/*
+// @allFrames    true
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // Universal selectors are now used instead of hardcoded sections
+
+  function getJQuery() {
+    return window.jQuery || window.$ || (typeof unsafeWindow !== 'undefined' ? (unsafeWindow.jQuery || unsafeWindow.$) : null);
+  }
+
+  /**
+   * Safe multi-method lookup for DevExtreme widget instances
+   */
+  function getDxWidgetInstance(el, widgetName) {
+    if (!el) return null;
+    const $ = getJQuery();
+
+    // 1. jQuery plugin method
+    try {
+      if ($ && typeof $(el)[widgetName] === 'function') {
+        const inst = $(el)[widgetName]('instance');
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 2. DevExpress global API
+    try {
+      const DevExpress = window.DevExpress || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.DevExpress : null);
+      if (DevExpress && DevExpress.ui && DevExpress.ui[widgetName]) {
+        const inst = DevExpress.ui[widgetName].getInstance(el);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 3. jQuery data attribute
+    try {
+      if ($) {
+        const inst = $(el).data(widgetName);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  /**
+   * Robust native click simulation
+   */
+  function triggerClick(el) {
+    if (!el) return;
+    ['mouseenter', 'mousedown', 'mouseup', 'click'].forEach(evtName => {
+      const evt = new MouseEvent(evtName, {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      });
+      el.dispatchEvent(evt);
+    });
+    if (typeof el.click === 'function') {
+      el.click();
+    }
+  }
+
+  /* ==========================================================================
+     SECTION A: HÀNH CHÍNH (ADMINISTRATIVE QUICK FILL)
+     ========================================================================== */
+
+  function getFieldContainerByLabel(labelText) {
+    const wrappers = document.querySelectorAll('.dx-template-wrapper');
+    for (let w of wrappers) {
+      const labelEl = w.querySelector('b');
+      if (labelEl) {
+        const cleanText = labelEl.textContent.replace(/\*/g, '').trim().toLowerCase();
+        if (cleanText === labelText.toLowerCase()) {
+          return w;
+        }
+      }
+    }
+    return null;
+  }
+
+  function simulateDropdownSelect(labelText, searchText, retries = 4) {
+    return new Promise(resolve => {
+      const targetContainer = getFieldContainerByLabel(labelText);
+      if (!targetContainer) {
+        console.warn(`[Hành chính] Không tìm thấy field: ${labelText}`);
+        return resolve(false);
+      }
+
+      const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox');
+      if (!widget) {
+        console.warn(`[Hành chính] Không tìm thấy dropdown cho: ${labelText}`);
+        return resolve(false);
+      }
+
+      const dropIcon = widget.querySelector('.dx-dropdowneditor-icon') || widget;
+      dropIcon.click();
+
+      let attempts = 0;
+
+      const interval = setInterval(() => {
+        attempts++;
+        const overlays = document.querySelectorAll('.dx-overlay-content:not(.dx-state-invisible)');
+        let found = false;
+
+        for (let overlay of overlays) {
+          const items = overlay.querySelectorAll('.dx-list-item');
+          for (let item of items) {
+            const text = item.textContent.replace(/\s+/g, ' ').trim().toLowerCase();
+            if (text.includes(searchText.toLowerCase())) {
+              item.click();
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+
+        if (found) {
+          clearInterval(interval);
+          resolve(true);
+        } else if (attempts >= retries) {
+          clearInterval(interval);
+          dropIcon.click();
+          console.warn(`[Hành chính] Không tìm thấy option "${searchText}" trong dropdown ${labelText}`);
+          resolve(false);
+        }
+      }, 500);
+    });
+  }
+
+  function simulateTick(labelText, optionText) {
+    const targetContainer = getFieldContainerByLabel(labelText);
+    if (!targetContainer) return false;
+
+    const radioGroup = targetContainer.querySelector('hradiogroup dx-radio-group, .dx-radiogroup');
+    if (radioGroup) {
+      const btns = radioGroup.querySelectorAll('.dx-radiobutton');
+      for (let btn of btns) {
+        if (btn.textContent.toLowerCase().includes(optionText.toLowerCase())) {
+          const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            const icon = btn.querySelector('.dx-radiobutton-icon') || btn;
+            icon.click();
+          }
+          return true;
+        }
+      }
+    }
+
+    const dxList = targetContainer.querySelector('hlistselection dx-list, .dx-list');
+    if (dxList) {
+      const items = dxList.querySelectorAll('.dx-list-item');
+      for (let item of items) {
+        if (item.textContent.toLowerCase().includes(optionText.toLowerCase())) {
+          const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+          if (!isSelected) {
+            const icon = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-select-radiobutton') || item;
+            icon.click();
+          }
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async function fillHanhChinh() {
+    const btn = document.getElementById('btnHanhChinh');
+    if (btn) btn.textContent = '⏳ Đang điền...';
+
+    await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
+    await simulateDropdownSelect('Địa điểm khám', 'Khám Lưu Động');
+    simulateTick('Hình thức chi trả khám sức khỏe', 'Ngân sách thành phố');
+    simulateTick('Hình thức khám', 'Khám theo hợp đồng');
+    simulateTick('Trẻ có đi học', 'Có');
+
+    setTimeout(async () => {
+      await simulateDropdownSelect('Xã phường', 'Thuận Giao');
+      setTimeout(async () => {
+        await simulateDropdownSelect('Trường', 'Đức Trí');
+        if (btn) {
+          btn.textContent = '✓ Hành chính';
+          btn.style.background = '#059669';
+          setTimeout(() => {
+            btn.textContent = 'Hành chính';
+            btn.style.background = '#8b5cf6';
+          }, 2500);
+        }
+      }, 600);
+    }, 600);
+  }
+
+  /* ==========================================================================
+     SECTION B: KSK NHI KHOA FORM AUTOMATION
+     ========================================================================== */
+  function processCheckbox(containerEl) {
+    if (!containerEl) return false;
+    const chkEl = containerEl.classList.contains('dx-checkbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-checkbox') || containerEl);
+
+    const inst = getDxWidgetInstance(chkEl, 'dxCheckBox');
+
+    if (inst) {
+      try {
+        if (inst.option('value') !== true) {
+          inst.option('value', true);
+        }
+      } catch (e) {
+        console.warn('[Fill all] Checkbox option set error:', e);
+      }
+    }
+
+    const icon = chkEl.querySelector('.dx-checkbox-icon') || chkEl;
+    const isChecked = chkEl.classList.contains('dx-checkbox-checked') || (inst && inst.option('value') === true);
+    if (!isChecked && icon) {
+      icon.click();
+    }
+    return true;
+  }
+
+  function processList(containerEl) {
+    if (!containerEl) return false;
+    const listEl = containerEl.classList.contains('dx-list')
+      ? containerEl
+      : (containerEl.querySelector('.dx-list') || containerEl);
+
+    const inst = getDxWidgetInstance(listEl, 'dxList');
+    const items = listEl.querySelectorAll('.dx-list-item');
+    if (!items.length) return false;
+
+    let processed = false;
+    items.forEach((item, index) => {
+      const text = item.textContent.replace(/\s+/g, ' ').trim();
+      if (text === 'Loại I' || /^loại\s*i$/i.test(text)) {
+        if (inst) {
+          try {
+            inst.selectItem(index);
+            processed = true;
+          } catch (e) {
+            console.warn('[Fill all] List selectItem error:', e);
+          }
+        }
+
+        const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+        if (!isSelected) {
+          const target = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-item-content') || item;
+          target.click();
+        }
+        processed = true;
+      }
+    });
+
+    return processed;
+  }
+
+  function findElements(selector) {
+    const els = document.querySelectorAll(selector);
+    return els ? Array.from(els) : [];
+  }
+
+  function fillAll() {
+    let filledCount = 0;
+
+    // Process all checkboxes containing "_ChuaPhatHienBatThuong"
+    const chkContainers = document.querySelectorAll('[class*="_ChuaPhatHienBatThuong"]');
+    chkContainers.forEach(function (el) {
+      if (el.className.includes('NoiKhoa_ChuaPhatHienBatThuong')) return; // Skip Kết luận chuyên nội khoa
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    // Process all lists containing "_PhanLoai"
+    const listContainers = document.querySelectorAll('[class*="_PhanLoai"]');
+    listContainers.forEach(function (el) {
+      if (el.className.includes('NoiKhoa_PhanLoai')) return; // Skip Kết luận chuyên nội khoa
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('fillAllBtn');
+    if (btn) {
+      const origText = 'Fill all';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Filled ${filledCount} items`;
+        btn.style.background = '#059669';
+      } else {
+        btn.textContent = '⚠ No fields found';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#059669';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION C: TAI - MŨI - HỌNG
+     ========================================================================== */
+
+  function setNumberBoxValue(containerEl, valueNum, valueStr) {
+    if (!containerEl) return false;
+    const numBoxEl = containerEl.classList.contains('dx-numberbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-numberbox') || containerEl);
+
+    // Strictly enforce comma for decimal separator (e.g. 3,19 instead of 3.19)
+    const formattedStr = String(valueStr || valueNum).replace('.', ',');
+    const parsedNum = typeof valueNum === 'number' ? valueNum : parseFloat(String(valueNum).replace(',', '.'));
+
+    const inst = getDxWidgetInstance(numBoxEl, 'dxNumberBox');
+    if (inst) {
+      try {
+        inst.option('value', parsedNum);
+      } catch (e) {
+        console.warn('NumberBox option set error:', e);
+      }
+    }
+
+    const input = numBoxEl.querySelector('input.dx-texteditor-input');
+    if (input) {
+      input.value = formattedStr;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }
+    return inst ? true : false;
+  }
+
+  function fillTaiHearing() {
+    let filledCount = 0;
+
+    const topLeft = document.querySelector('.TMH_TaiTrai_NoiThuong, [class*="TaiTrai_NoiThuong" i]');
+    if (topLeft && setNumberBoxValue(topLeft, 5, '5')) filledCount++;
+
+    const bottomLeft = document.querySelector('.TMH_TaiPhai_NoiThuong, [class*="TaiPhai_NoiThuong" i]');
+    if (bottomLeft && setNumberBoxValue(bottomLeft, 5, '5')) filledCount++;
+
+    const topRight = document.querySelector('.TMH_TaiTrai_NoiTham, [class*="TaiTrai_NoiTham" i]');
+    if (topRight && setNumberBoxValue(topRight, 0.5, '0,5')) filledCount++;
+
+    const bottomRight = document.querySelector('.TMH_TaiPhai_NoiTham, [class*="TaiPhai_NoiTham" i]');
+    if (bottomRight && setNumberBoxValue(bottomRight, 0.5, '0,5')) filledCount++;
+
+    const chkContainers = findElements('.TMH_ChuaPhatHienBatThuong');
+    chkContainers.forEach(function (el) {
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    const listContainers = findElements('.TMH_PhanLoai');
+    listContainers.forEach(function (el) {
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('btnTai');
+    if (btn) {
+      const origText = 'Tai';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Tai (${filledCount})`;
+        btn.style.background = '#0284c7';
+      } else {
+        btn.textContent = '⚠ Tai (0)';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#0284c7';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION D: RĂNG - HÀM - MẶT
+     ========================================================================== */
+
+  function fillRang() {
+    let filledCount = 0;
+
+    const chkContainers = findElements('.RHM_ChuaPhatHienBatThuong');
+    chkContainers.forEach(function (el) {
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    const listContainers = findElements('.RHM_PhanLoai');
+    listContainers.forEach(function (el) {
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('btnRang');
+    if (btn) {
+      const origText = 'Răng';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Răng (${filledCount})`;
+        btn.style.background = '#0d9488';
+      } else {
+        btn.textContent = '⚠ Răng (0)';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#0d9488';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION E: TIÊM CHỦNG
+     ========================================================================== */
+
+  function fillVaccines(regexPattern) {
+    const radioGroups = document.querySelectorAll('.dx-radiogroup, .editorRadio');
+    let filledCount = 0;
+
+    radioGroups.forEach(groupEl => {
+      const inst = getDxWidgetInstance(groupEl, 'dxRadioGroup');
+      const radioBtns = groupEl.querySelectorAll('.dx-radiobutton');
+
+      radioBtns.forEach((btn, index) => {
+        const text = btn.textContent.replace(/\s+/g, ' ').trim();
+        if (regexPattern.test(text)) {
+          if (inst) {
+            try {
+              const items = inst.option('items');
+              if (items && items[index]) {
+                inst.option('value', items[index]);
+              } else {
+                inst.option('value', text);
+              }
+            } catch (e) {}
+          }
+
+          const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            const clickTarget = btn.querySelector('.dx-radiobutton-icon, .dx-radio-value-container, .dx-item-content') || btn;
+            clickTarget.click();
+          }
+          filledCount++;
+        }
+      });
+    });
+
+    return filledCount;
+  }
+
+  function handleVaccineClick(btnId, labelText, regexPattern) {
+    const count = fillVaccines(regexPattern);
+    const btn = document.getElementById(btnId);
+    if (btn) {
+      const origText = labelText;
+      if (count > 0) {
+        btn.textContent = `✓ ${labelText} (${count})`;
+      } else {
+        btn.textContent = `⚠ ${labelText} (0)`;
+      }
+      setTimeout(() => {
+        btn.textContent = origText;
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION F: NGƯỜI CAO TUỔI (M4) MASS SELECT
+     ========================================================================== */
+
+  function massSelectKhongTienSu() {
+    const section2 = document.querySelector('.Benh_TienSuBanThan_Json') || document;
+    const rows = section2.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const listItems = row.querySelectorAll('.dx-list-item');
+      listItems.forEach(item => {
+        const text = (item.textContent || item.innerText || '').trim();
+        if (text === 'Không') {
+          const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+          triggerClick(radio);
+          triggerClick(item);
+
+          const dxListEl = item.closest('.dx-list');
+          if (dxListEl) {
+            const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+            if (listWidget && typeof listWidget.selectItem === 'function') {
+              try { listWidget.selectItem(item); } catch (e) {}
+            }
+          }
+          count++;
+        }
+      });
+    });
+
+    const btn = document.getElementById('btnKhongTienSu');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Không (tiền sử)';
+      }, 1800);
+    }
+  }
+
+  function massSelectHauNhuKhong() {
+    const rows = document.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const firstCol = row.querySelector('td:first-child');
+      const firstColText = firstCol ? (firstCol.textContent || firstCol.innerText || '').trim() : '';
+
+      if (firstColText.startsWith('D6.') || firstColText.startsWith('D7.')) {
+        const listItems = row.querySelectorAll('.dx-list-item');
+        listItems.forEach(item => {
+          const text = (item.textContent || item.innerText || '').trim();
+          if (text === 'Hầu như không') {
+            const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+            triggerClick(radio);
+            triggerClick(item);
+
+            const dxListEl = item.closest('.dx-list');
+            if (dxListEl) {
+              const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+              if (listWidget && typeof listWidget.selectItem === 'function') {
+                try { listWidget.selectItem(item); } catch (e) {}
+              }
+            }
+            count++;
+          }
+        });
+      }
+    });
+
+    const btn = document.getElementById('btnHauNhuKhong');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Hầu Như Không';
+      }, 1800);
+    }
+  }
+
+  function massSelectCoD8() {
+    const rows = document.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const firstCol = row.querySelector('td:first-child');
+      let firstColText = firstCol ? (firstCol.textContent || firstCol.innerText || '').trim() : '';
+
+      // Strip any trailing dots or spaces
+      firstColText = firstColText.replace(/\.$/, '');
+
+      if (firstColText === 'D8' || firstColText.startsWith('D8.1') || firstColText.startsWith('D8.2')) {
+        const listItems = row.querySelectorAll('.dx-list-item');
+        listItems.forEach(item => {
+          const text = (item.textContent || item.innerText || '').trim();
+          if (text === 'Có') {
+            const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+            triggerClick(radio);
+            triggerClick(item);
+
+            const dxListEl = item.closest('.dx-list');
+            if (dxListEl) {
+              const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+              if (listWidget && typeof listWidget.selectItem === 'function') {
+                try { listWidget.selectItem(item); } catch (e) {}
+              }
+            }
+            count++;
+          }
+        });
+      }
+    });
+
+    const btn = document.getElementById('btnCoD8');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Có D8';
+      }, 1800);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION G: RĂNG HÀM MẶT AUTOMATION (NEW UI)
+     ========================================================================== */
+
+  function setDxSelectBoxByText(widgetInstance, textToFind) {
+    if (!widgetInstance) return false;
+    try {
+      let items = [];
+      const ds = widgetInstance.option('dataSource');
+      const itemsOption = widgetInstance.option('items');
+      
+      if (Array.isArray(itemsOption) && itemsOption.length > 0) {
+        items = itemsOption;
+      } else if (Array.isArray(ds)) {
+        items = ds;
+      } else if (ds && ds.store) {
+        const store = typeof ds.store === 'function' ? ds.store() : ds.store;
+        if (store && store._array) {
+          items = store._array;
+        }
+      }
+
+      const displayExpr = widgetInstance.option('displayExpr');
+      const valueExpr = widgetInstance.option('valueExpr');
+
+      for (let item of items) {
+        const itemText = (typeof item === 'object' && displayExpr) ? item[displayExpr] : item;
+        if (itemText && String(itemText).toLowerCase().includes(textToFind.toLowerCase())) {
+          const valToSet = (typeof item === 'object' && valueExpr) ? item[valueExpr] : item;
+          // dxTagBox uses arrays for values
+          if (widgetInstance.NAME === 'dxTagBox') {
+            let currentVal = widgetInstance.option('value') || [];
+            if (!Array.isArray(currentVal)) currentVal = [currentVal];
+            if (!currentVal.includes(valToSet)) {
+               widgetInstance.option('value', [...currentVal, valToSet]);
+            }
+          } else {
+            widgetInstance.option('value', valToSet);
+          }
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('[RHM] Error setting dx select box', e);
+    }
+    return false;
+  }
+
+  function findToothWidget(toothNumber) {
+    // 1. Try DevExtreme field items
+    const fieldItems = document.querySelectorAll('.dx-field-item');
+    for (let field of fieldItems) {
+      const label = field.querySelector('.dx-field-item-label-text');
+      if (label) {
+        const labelText = label.textContent.trim().toLowerCase();
+        const tStr = String(toothNumber).toLowerCase();
+        if (labelText === tStr || labelText === `răng ${tStr}` || labelText === `răng số ${tStr}` || labelText.includes(` ${tStr}`)) {
+          const widgetEl = field.querySelector('.dx-selectbox, .dx-tagbox');
+          if (widgetEl) {
+            const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
+            if (inst) return inst;
+          }
+        }
+      }
+    }
+
+    // 2. Try generic tables/grids or adjacent elements
+    const allLabels = document.querySelectorAll('label, span, td, div');
+    for (let el of allLabels) {
+      // Must be a leaf node or contain very little text to be a label
+      if (el.children.length > 2) continue;
+      
+      const text = (el.textContent || '').trim().toLowerCase();
+      const tStr = String(toothNumber).toLowerCase();
+      
+      if (text === tStr || text === `răng ${tStr}` || text === `răng số ${tStr}`) {
+        // Look up the tree for a container that might hold the selectbox
+        let current = el.parentElement;
+        let depth = 0;
+        while (current && depth < 3) {
+          const widgetEl = current.querySelector('.dx-selectbox, .dx-tagbox');
+          if (widgetEl) {
+            const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
+            if (inst) return inst;
+          }
+          current = current.parentElement;
+          depth++;
+        }
+      }
+    }
+    return null;
+  }
+
+  function processTeethInput(statusText) {
+    const inputEl = document.getElementById('inputTeethRHM');
+    const statusEl = document.getElementById('rhmStatusLabel');
+    if (!inputEl) return;
+
+    const rawVal = inputEl.value;
+    if (!rawVal.trim()) {
+      if (statusEl) {
+        statusEl.textContent = '⚠ Vui lòng nhập số răng';
+        statusEl.style.color = '#dc2626';
+      }
+      return;
+    }
+
+    // Parse comma separated numbers
+    const teeth = rawVal.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    let successCount = 0;
+    let failList = [];
+
+    teeth.forEach(t => {
+      const widget = findToothWidget(t);
+      if (widget) {
+        const success = setDxSelectBoxByText(widget, statusText);
+        if (success) successCount++;
+        else failList.push(t);
+      } else {
+        failList.push(t);
+      }
+    });
+
+    if (statusEl) {
+      if (failList.length > 0) {
+        statusEl.textContent = `⚠ Lỗi răng: ${failList.join(', ')}`;
+        statusEl.style.color = '#dc2626';
+      } else {
+        statusEl.textContent = `✓ Đã cập nhật ${successCount} răng`;
+        statusEl.style.color = '#16a34a';
+        inputEl.value = ''; // clear on success
+      }
+      
+      setTimeout(() => {
+        statusEl.textContent = '';
+      }, 3000);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION H: XÉT NGHIỆM MÁU / CẬN LÂM SÀNG JSON IMPORTER
+     ========================================================================== */
+
+  const BLOOD_TEST_MAP = {
+    // Hồng cầu / Red Blood Cells
+    'hc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+    'rbc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+    'soluonghc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+
+    'huyetsacto': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+    'hgb': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+    'hb': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+
+    'hematocrit': ['.XNM_Hematocrit', '[class*="XNM_Hematocrit"]'],
+    'hct': ['.XNM_Hematocrit', '[class*="XNM_Hematocrit"]'],
+
+    'mcv': ['.XNM_MCV', '[class*="XNM_MCV"]'],
+    'mch': ['.XNM_MCH', '[class*="XNM_MCH"]'],
+    'mchc': ['.XNM_MCHC', '[class*="XNM_MCHC"]'],
+    'rdw': ['.XNM_RDW', '[class*="XNM_RDW"]'],
+
+    // Bạch cầu / White Blood Cells
+    'bachcau': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+    'wbc': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+    'soluongbachcau': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+
+    'trungtinh': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'neu': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'neutrophil': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+
+    'lympho': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+    'lym': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+    'lymphocyte': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+
+    'donnhan': ['.SLBC_DonNhan', '[class*="SLBC_DonNhan"]'],
+    'mono': ['.SLBC_DonNhan', '[class*="SLBC_DonNhan"]'],
+    'monocyte': ['.SLBC_DonNhan', '[class*="SLBC_DonNhan"]'],
+
+    'aitoan': ['.SLBC_AiToan', '[class*="SLBC_AiToan"]'],
+    'eos': ['.SLBC_AiToan', '[class*="SLBC_AiToan"]'],
+    'eosinophil': ['.SLBC_AiToan', '[class*="SLBC_AiToan"]'],
+
+    'aikiem': ['.SLBC_AiKiem', '[class*="SLBC_AiKiem"]'],
+    'baso': ['.SLBC_AiKiem', '[class*="SLBC_AiKiem"]'],
+    'basophil': ['.SLBC_AiKiem', '[class*="SLBC_AiKiem"]'],
+
+    // Tiểu cầu / Platelets
+    'tieucau': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+    'plt': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+    'soluongtieucau': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+
+    // Sinh hóa máu / Biochemistry
+    'duongmau': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+    'glucose': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+    'glu': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+
+    'ure': ['.SinhHoaMau_Ure', '[class*="SinhHoaMau_Ure"]'],
+    'urea': ['.SinhHoaMau_Ure', '[class*="SinhHoaMau_Ure"]'],
+
+    'creatinin': ['.SinhHoaMau_Creatinin', '[class*="SinhHoaMau_Creatinin"]'],
+    'creatinine': ['.SinhHoaMau_Creatinin', '[class*="SinhHoaMau_Creatinin"]'],
+
+    'asat': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+    'got': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+    'ast': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+
+    'alat': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+    'gpt': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+    'alt': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+
+    // Nước tiểu / Urine
+    'titrong': ['.NuocTieu_TiTrong', '[class*="NuocTieu_TiTrong"]'],
+    'sg': ['.NuocTieu_TiTrong', '[class*="NuocTieu_TiTrong"]'],
+
+    'ph': ['.NuocTieu_pH', '[class*="NuocTieu_pH"]'],
+
+    'nuoc_tieu_bc': ['.NuocTieu_BC', '[class*="NuocTieu_BC"]'],
+    'leu': ['.NuocTieu_BC', '[class*="NuocTieu_BC"]'],
+
+    'nuoc_tieu_hc': ['.NuocTieu_HC', '[class*="NuocTieu_HC"]'],
+    'ery': ['.NuocTieu_HC', '[class*="NuocTieu_HC"]'],
+
+    'protein': ['.NuocTieu_Protein', '[class*="NuocTieu_Protein"]'],
+
+    'nuoc_tieu_duong': ['.NuocTieu_Duong', '[class*="NuocTieu_Duong"]'],
+    'ket': ['.NuocTieu_Cetonic', '[class*="NuocTieu_Cetonic"]'],
+    'bil': ['.NuocTieu_Bilirubin', '[class*="NuocTieu_Bilirubin"]'],
+    'uro': ['.NuocTieu_Urobilinogen', '[class*="NuocTieu_Urobilinogen"]']
+  };
+
+  function setTextBoxValue(containerEl, valueStr) {
+    if (!containerEl) return false;
+    const txtBoxEl = containerEl.classList.contains('dx-textbox') || containerEl.classList.contains('dx-autocomplete')
+      ? containerEl
+      : (containerEl.querySelector('.dx-textbox, .dx-autocomplete') || containerEl);
+
+    const inst = getDxWidgetInstance(txtBoxEl, 'dxTextBox') || getDxWidgetInstance(txtBoxEl, 'dxAutocomplete');
+    if (inst) {
+      try {
+        inst.option('value', valueStr);
+        return true;
+      } catch (e) {}
+    }
+
+    const input = txtBoxEl.querySelector('input.dx-texteditor-input');
+    if (input) {
+      input.value = valueStr;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function fillUrineDefaults() {
+    const textFields = [
+      '.NuocTieu_BC', '[class*="NuocTieu_BC"]',
+      '.NuocTieu_HC', '[class*="NuocTieu_HC"]',
+      '.NuocTieu_Protein', '[class*="NuocTieu_Protein"]',
+      '.NuocTieu_Duong', '[class*="NuocTieu_Duong"]',
+      '.NuocTieu_Cetonic', '[class*="NuocTieu_Cetonic"]',
+      '.NuocTieu_Bilirubin', '[class*="NuocTieu_Bilirubin"]',
+      '.NuocTieu_Urobilinogen', '[class*="NuocTieu_Urobilinogen"]'
+    ];
+
+    textFields.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) setTextBoxValue(el, 'Negative');
+    });
+
+    // Nitrit -> "Âm Tính"
+    const nitritEl = document.querySelector('.NuocTieu_NiTrit, [class*="NuocTieu_NiTrit"]');
+    if (nitritEl) {
+      const btns = nitritEl.querySelectorAll('.dx-radiobutton');
+      btns.forEach(btn => {
+        if (btn.textContent.includes('Âm Tính')) {
+          const icon = btn.querySelector('.dx-radiobutton-icon') || btn;
+          icon.click();
+        }
+      });
+    }
+  }
+
+  function parseAndFillBloodTestJSON(jsonInput) {
+    let data;
+    try {
+      // Remove any markdown code block fences if present
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    let count = 0;
+    for (let rawKey in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, rawKey)) continue;
+      
+      const val = data[rawKey];
+      if (val === null || val === undefined || val === '') continue;
+
+      // Normalize key
+      const normKey = rawKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const selectors = BLOOD_TEST_MAP[normKey];
+
+      if (selectors) {
+        let el = null;
+        for (let sel of selectors) {
+          el = document.querySelector(sel);
+          if (el) break;
+        }
+
+        if (el) {
+          const valNum = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
+          const valStr = String(val).replace('.', ',');
+
+          if (!isNaN(valNum) && setNumberBoxValue(el, valNum, valStr)) {
+            count++;
+          } else if (setTextBoxValue(el, String(val))) {
+            count++;
+          }
+        }
+      }
+    }
+
+    // Automatically fill non-numeric Urine fields with Negative / Âm Tính
+    fillUrineDefaults();
+
+    return count;
+  }
+
+  function showBloodTestModal() {
+    let modal = document.getElementById('bloodTestModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'bloodTestModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh/báo cáo kết quả xét nghiệm này và trích xuất các chỉ số thành định dạng JSON đơn giản:
+{
+  "rbc": <Số lượng HC>,
+  "hgb": <Huyết sắc tố>,
+  "hct": <Hematocrit>,
+  "mcv": <MCV>,
+  "mch": <MCH>,
+  "mchc": <MCHC>,
+  "rdw": <RDW>,
+  "wbc": <Số lượng bạch cầu>,
+  "neu": <Số lượng bạch cầu trung tính>,
+  "lym": <Số lượng bạch cầu lympho>,
+  "plt": <Số lượng tiểu cầu>,
+  "glucose": <Đường máu>,
+  "creatinin": <Creatinin>,
+  "ast": <ASAT/GOT>,
+  "alt": <ALAT/GPT>,
+  "ti_trong": <Tỉ trọng nước tiểu (nếu có)>,
+  "ph": <pH nước tiểu (nếu có)>
+}
+Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #0284c7, #0369a1); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧪 Nhập Dữ Liệu Xét Nghiệm Máu (JSON)</h3>
+            <button id="btnModalCloseX" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON kết quả xét nghiệm vào bên dưới:</span>
+              <button id="btnCopyPrompt" style="background: #f1f5f9; color: #0284c7; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputArea" placeholder='Vd: {"rbc": 4.5, "hgb": 135, "wbc": 6.8, "plt": 250, "glucose": 5.2, "creatinin": 75}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatus" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClear" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImport" style="background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Event Listeners inside modal
+      document.getElementById('btnModalCloseX').addEventListener('click', () => modal.style.display = 'none');
+      document.getElementById('btnModalClear').addEventListener('click', () => {
+        document.getElementById('jsonInputArea').value = '';
+        document.getElementById('modalStatus').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPrompt').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR!\nBạn có thể dán Prompt này kèm ảnh kết quả xét nghiệm vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImport').addEventListener('click', () => {
+        const text = document.getElementById('jsonInputArea').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const filled = parseAndFillBloodTestJSON(text);
+        const statusEl = document.getElementById('modalStatus');
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công ${filled} chỉ số xét nghiệm!`;
+            statusEl.style.display = 'block';
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy trường tương ứng trên trang hiện tại!';
+            statusEl.style.display = 'block';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  /* ==========================================================================
+     UI BUTTON BAR INJECTION
+     ========================================================================== */
+
+  function injectButtons() {
+    if (document.getElementById('automationPanel')) return;
+
+    const container = document.createElement('div');
+    container.id = 'automationPanel';
+    container.style.cssText = [
+      'position: fixed',
+      'top: 12px',
+      'right: 15px',
+      'z-index: 999999',
+      'font-family: system-ui, -apple-system, sans-serif'
+    ].join(';');
+
+    // Main Toggle Button
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = '⚙️ SKCD Tools';
+    toggleBtn.style.cssText = [
+      'background: #3b82f6',
+      'color: #ffffff',
+      'border: none',
+      'border-radius: 6px',
+      'padding: 8px 14px',
+      'font-size: 13px',
+      'font-weight: 600',
+      'cursor: pointer',
+      'box-shadow: 0 4px 12px rgba(0,0,0,0.25)',
+      'transition: all 0.2s ease-in-out',
+      'white-space: nowrap'
+    ].join(';');
+
+    // Dropdown Container
+    const dropdown = document.createElement('div');
+    dropdown.style.cssText = [
+      'display: none',
+      'position: absolute',
+      'top: 115%',
+      'right: 0',
+      'background: rgba(255, 255, 255, 0.95)',
+      'backdrop-filter: blur(8px)',
+      'padding: 10px',
+      'border-radius: 8px',
+      'box-shadow: 0 4px 15px rgba(0,0,0,0.18)',
+      'border: 1px solid rgba(148, 163, 184, 0.3)',
+      'flex-direction: column',
+      'gap: 8px',
+      'min-width: 160px'
+    ].join(';');
+
+    // Toggle Dropdown
+    toggleBtn.addEventListener('click', () => {
+      dropdown.style.display = dropdown.style.display === 'none' ? 'flex' : 'none';
+    });
+
+    // Close Dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!container.contains(e.target)) {
+        dropdown.style.display = 'none';
+      }
+    });
+
+    function createBtn(id, text, bg, onClick) {
+      const btn = document.createElement('button');
+      btn.id = id;
+      btn.textContent = text;
+      btn.style.cssText = [
+        `background: ${bg}`,
+        'color: #ffffff',
+        'border: none',
+        'border-radius: 6px',
+        'padding: 8px 14px',
+        'font-size: 13px',
+        'font-weight: 600',
+        'cursor: pointer',
+        'box-shadow: 0 2px 6px rgba(0,0,0,0.15)',
+        'transition: all 0.2s ease-in-out',
+        'white-space: nowrap',
+        'width: 100%',
+        'text-align: left'
+      ].join(';');
+
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'translateX(-2px)';
+        btn.style.boxShadow = '0 4px 10px rgba(0,0,0,0.25)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'translateX(0)';
+        btn.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+      });
+
+      btn.addEventListener('click', (e) => {
+        // Keep the dropdown open or close it? Let's close it after a button is clicked, after a small delay
+        onClick(e);
+        setTimeout(() => { dropdown.style.display = 'none'; }, 2500); // 2.5s allows time for the checkmark flash animation
+      });
+      return btn;
+    }
+
+    const btnHanhChinh = createBtn('btnHanhChinh', 'Hành chính', '#8b5cf6', fillHanhChinh);
+    const btnFillAll = createBtn('fillAllBtn', 'Fill all', '#059669', fillAll);
+    const btnTai = createBtn('btnTai', 'Tai', '#0284c7', fillTaiHearing);
+    const btnRang = createBtn('btnRang', 'Răng', '#0d9488', fillRang);
+    
+    // Tiêm chủng buttons
+    const btnDaTiem = createBtn('btnDaTiem', 'Đã tiêm (Vaccine)', '#2563eb', () => handleVaccineClick('btnDaTiem', 'Đã tiêm (Vaccine)', /^đã\s*tiêm/i));
+    const btnChuaTiem = createBtn('btnChuaTiem', 'Chưa tiêm (Vaccine)', '#d97706', () => handleVaccineClick('btnChuaTiem', 'Chưa tiêm (Vaccine)', /^chưa\s*tiêm/i));
+    const btnKhongNhoRo = createBtn('btnKhongNhoRo', 'Không nhớ (Vaccine)', '#4b5563', () => handleVaccineClick('btnKhongNhoRo', 'Không nhớ (Vaccine)', /^không\s*nhớ\s*rõ/i));
+
+    // Nguoi Cao Tuoi (M4) buttons
+    const btnKhongTienSu = createBtn('btnKhongTienSu', 'Không (tiền sử)', '#dc2626', massSelectKhongTienSu);
+    const btnHauNhuKhong = createBtn('btnHauNhuKhong', 'Hầu Như Không', '#8b5cf6', massSelectHauNhuKhong);
+    const btnCoD8 = createBtn('btnCoD8', 'Có D8', '#ea580c', massSelectCoD8);
+    const btnXetNghiemMau = createBtn('btnXetNghiemMau', '🧪 Xét nghiệm máu', '#0284c7', showBloodTestModal);
+
+    // RHM UI Builder
+    function createRHMInputGroup() {
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px;';
+      
+      const header = document.createElement('div');
+      header.textContent = '🦷 Đánh dấu răng (RHM)';
+      header.style.cssText = 'font-size: 12px; font-weight: 600; color: #475569;';
+      
+      const input = document.createElement('input');
+      input.id = 'inputTeethRHM';
+      input.type = 'text';
+      input.placeholder = 'Nhập răng, vd: 17, 18';
+      input.style.cssText = 'padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box;';
+      
+      // Stop clicks inside input from closing the dropdown
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('keydown', (e) => e.stopPropagation());
+
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 4px; justify-content: space-between;';
+      
+      function makeMiniBtn(text, color, condition) {
+        const btn = document.createElement('button');
+        btn.textContent = text;
+        btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 4px 0; cursor: pointer; font-weight: 600;`;
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation(); // prevent closing
+          processTeethInput(condition);
+        });
+        return btn;
+      }
+      
+      btnRow.appendChild(makeMiniBtn('Sâu', '#ea580c', 'Sâu'));
+      btnRow.appendChild(makeMiniBtn('Mất', '#dc2626', 'Mất'));
+      btnRow.appendChild(makeMiniBtn('Khác', '#9333ea', 'Mất lý do khác'));
+
+      const status = document.createElement('div');
+      status.id = 'rhmStatusLabel';
+      status.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
+      
+      wrapper.appendChild(header);
+      wrapper.appendChild(input);
+      wrapper.appendChild(btnRow);
+      wrapper.appendChild(status);
+      return wrapper;
+    }
+
+    // Append buttons to dropdown
+    dropdown.appendChild(btnHanhChinh);
+    dropdown.appendChild(btnFillAll);
+    dropdown.appendChild(btnTai);
+    dropdown.appendChild(btnRang);
+    
+    // Add Tiêm chủng buttons
+    dropdown.appendChild(btnDaTiem);
+    dropdown.appendChild(btnChuaTiem);
+    dropdown.appendChild(btnKhongNhoRo);
+
+    dropdown.appendChild(btnKhongTienSu);
+    dropdown.appendChild(btnHauNhuKhong);
+    dropdown.appendChild(btnCoD8);
+    dropdown.appendChild(createRHMInputGroup());
+    dropdown.appendChild(btnXetNghiemMau);
+
+    container.appendChild(toggleBtn);
+    container.appendChild(dropdown);
+
+    document.body.appendChild(container);
+  }
+
+  setInterval(injectButtons, 1000);
+})();
