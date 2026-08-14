@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Quan Ly SKCD - Fill All Form
+// @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      5.668
+// @version      5.9
 // @description  Floating automation buttons for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, M4, RHM, Cận Lâm Sàng JSON Importer with Comma Decimals)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
@@ -1112,6 +1112,133 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
   }
 
   /* ==========================================================================
+     SECTION J: KẾT LUẬN (ĐỀ NGHỊ) AUTOMATION
+     ========================================================================== */
+
+  const KET_LUAN_PHRASES = [
+    { key: 'noi', label: 'Nội', full: 'Khám CK Nội' },
+    { key: 'ngoai', label: 'Ngoại', full: 'Khám CK Ngoại' },
+    { key: 'mat', label: 'Mắt', full: 'Khám CK Mắt' },
+    { key: 'rhm', label: 'RHM', full: 'Khám CK Răng Hàm Mặt' },
+    { key: 'tmh', label: 'TMH', full: 'Khám CK Tai Mũi Họng' },
+    { key: 'tamthan', label: 'Tâm thần', full: 'Khám CK Tâm thần - vận động' }
+  ];
+
+  function fillKetLuanDeNghi(selectedKeys) {
+    const container = document.querySelector('.KetLuan_DeNghi, [class*="KetLuan_DeNghi"]');
+    if (!container) return 0;
+
+    const phrasesToFill = KET_LUAN_PHRASES
+      .filter(p => selectedKeys.includes(p.key))
+      .map(p => p.full);
+
+    if (!phrasesToFill.length) return 0;
+
+    const htmlValue = phrasesToFill.map(p => `<p>${p}</p>`).join('');
+
+    const htmlEditorEl = container.querySelector('.dx-htmleditor') || container;
+    const inst = getDxWidgetInstance(htmlEditorEl, 'dxHtmlEditor');
+
+    if (inst) {
+      try {
+        inst.option('value', htmlValue);
+        return phrasesToFill.length;
+      } catch (e) {
+        console.warn('[Kết luận] dxHtmlEditor option set error:', e);
+      }
+    }
+
+    const qlEditor = container.querySelector('.ql-editor');
+    if (qlEditor) {
+      qlEditor.innerHTML = htmlValue;
+      qlEditor.dispatchEvent(new Event('input', { bubbles: true }));
+      qlEditor.dispatchEvent(new Event('change', { bubbles: true }));
+      return phrasesToFill.length;
+    }
+
+    return 0;
+  }
+
+  function createKetLuanInputGroup() {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; width: 170px;';
+
+    const header = document.createElement('div');
+    header.textContent = '📋 Đề nghị chuyên khoa';
+    header.style.cssText = 'font-size: 12px; font-weight: 600; color: #475569;';
+
+    const selectedKeys = new Set();
+
+    const gridContainer = document.createElement('div');
+    gridContainer.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 4px;';
+
+    KET_LUAN_PHRASES.forEach(p => {
+      const chip = document.createElement('button');
+      chip.textContent = p.label;
+      chip.style.cssText = 'padding: 5px 4px; font-size: 11px; font-weight: 600; border: 1px solid #cbd5e1; background: #ffffff; color: #334155; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; text-align: center;';
+
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (selectedKeys.has(p.key)) {
+          selectedKeys.delete(p.key);
+          chip.style.background = '#ffffff';
+          chip.style.color = '#334155';
+          chip.style.borderColor = '#cbd5e1';
+        } else {
+          selectedKeys.add(p.key);
+          chip.style.background = '#3b82f6';
+          chip.style.color = '#ffffff';
+          chip.style.borderColor = '#2563eb';
+        }
+      });
+
+      gridContainer.appendChild(chip);
+    });
+
+    const statusLabel = document.createElement('div');
+    statusLabel.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = '✓ Điền Đề Nghị';
+    confirmBtn.style.cssText = 'background: #059669; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 6px 0; cursor: pointer; font-weight: 700; margin-top: 2px; width: 100%; transition: background 0.2s;';
+
+    confirmBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const keysArray = Array.from(selectedKeys);
+      if (!keysArray.length) {
+        statusLabel.textContent = '⚠ Chọn ít nhất 1 đề nghị';
+        statusLabel.style.color = '#dc2626';
+        setTimeout(() => { statusLabel.textContent = ''; }, 2500);
+        return;
+      }
+
+      const count = fillKetLuanDeNghi(keysArray);
+      if (count > 0) {
+        statusLabel.textContent = `✓ Đã điền ${count} đề nghị`;
+        statusLabel.style.color = '#16a34a';
+        confirmBtn.style.background = '#047857';
+        setTimeout(() => {
+          statusLabel.textContent = '';
+          confirmBtn.style.background = '#059669';
+        }, 2500);
+      } else {
+        statusLabel.textContent = '⚠ Không tìm thấy ô Đề nghị';
+        statusLabel.style.color = '#dc2626';
+        setTimeout(() => { statusLabel.textContent = ''; }, 2500);
+      }
+    });
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(gridContainer);
+    wrapper.appendChild(confirmBtn);
+    wrapper.appendChild(statusLabel);
+
+    wrapper.addEventListener('click', (e) => e.stopPropagation());
+
+    return wrapper;
+  }
+
+  /* ==========================================================================
      UI BUTTON BAR INJECTION
      ========================================================================== */
 
@@ -1407,6 +1534,11 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     menuTamThan.subDropdown.appendChild(btnTamThanKhongCo);
     menuTamThan.subDropdown.appendChild(btnTamThanHTKDY);
     dropdown.appendChild(menuTamThan.wrapper);
+
+    // 6. Kết Luận Sub-menu (Pure Addition)
+    const menuKetLuan = createSubMenu('Kết Luận', '#059669');
+    menuKetLuan.subDropdown.appendChild(createKetLuanInputGroup());
+    dropdown.appendChild(menuKetLuan.wrapper);
 
     // Xet nghiem mau is a standalone button
     dropdown.appendChild(btnXetNghiemMau);
