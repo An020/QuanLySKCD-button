@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      5.9
-// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, M4, RHM, Cận Lâm Sàng JSON Importer with Comma Decimals)
+// @version      6.0
+// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, M4, RHM Tooth Chart, Cận Lâm Sàng JSON Importer with Comma Decimals, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
 // @match        *://*.medinet.org.vn/*
@@ -607,8 +607,12 @@
   }
 
   /* ==========================================================================
-     SECTION G: RĂNG HÀM MẶT AUTOMATION (NEW UI)
+     SECTION G: RĂNG HÀM MẶT AUTOMATION (NEW UI & INTERACTIVE TOOTH CHART)
      ========================================================================== */
+
+  const TEETH_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
+  const TEETH_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
+  const ALL_TEETH = [...TEETH_UPPER, ...TEETH_LOWER];
 
   function setDxSelectBoxByText(widgetInstance, textToFind) {
     if (!widgetInstance) return false;
@@ -654,9 +658,9 @@
     return false;
   }
 
-  function findToothWidget(toothNumber) {
+  function findToothWidget(toothNumber, rootDoc = document) {
     // 1. Try DevExtreme field items
-    const fieldItems = document.querySelectorAll('.dx-field-item');
+    const fieldItems = rootDoc.querySelectorAll('.dx-field-item');
     for (let field of fieldItems) {
       const label = field.querySelector('.dx-field-item-label-text');
       if (label) {
@@ -673,16 +677,14 @@
     }
 
     // 2. Try generic tables/grids or adjacent elements
-    const allLabels = document.querySelectorAll('label, span, td, div');
+    const allLabels = rootDoc.querySelectorAll('label, span, td, div');
     for (let el of allLabels) {
-      // Must be a leaf node or contain very little text to be a label
       if (el.children.length > 2) continue;
 
       const text = (el.textContent || '').trim().toLowerCase();
       const tStr = String(toothNumber).toLowerCase();
 
       if (text === tStr || text === `răng ${tStr}` || text === `răng số ${tStr}`) {
-        // Look up the tree for a container that might hold the selectbox
         let current = el.parentElement;
         let depth = 0;
         while (current && depth < 3) {
@@ -696,25 +698,51 @@
         }
       }
     }
+
+    // 3. Search inside iframes if present
+    const iframes = rootDoc.querySelectorAll('iframe');
+    for (let ifr of iframes) {
+      try {
+        const ifrDoc = ifr.contentDocument || (ifr.contentWindow && ifr.contentWindow.document);
+        if (ifrDoc) {
+          const found = findToothWidget(toothNumber, ifrDoc);
+          if (found) return found;
+        }
+      } catch (e) {}
+    }
+
     return null;
   }
 
-  function processTeethInput(statusText) {
+  function processTeethInput(statusText, explicitTeethList = null) {
     const inputEl = document.getElementById('inputTeethRHM');
     const statusEl = document.getElementById('rhmStatusLabel');
-    if (!inputEl) return;
 
-    const rawVal = inputEl.value;
-    if (!rawVal.trim()) {
-      if (statusEl) {
-        statusEl.textContent = '⚠ Vui lòng nhập số răng';
-        statusEl.style.color = '#dc2626';
+    let teeth = [];
+    if (Array.isArray(explicitTeethList) && explicitTeethList.length > 0) {
+      teeth = explicitTeethList;
+    } else if (inputEl) {
+      const rawVal = inputEl.value;
+      if (!rawVal.trim()) {
+        if (statusEl) {
+          statusEl.textContent = '⚠ Vui lòng chọn hoặc nhập số răng';
+          statusEl.style.color = '#dc2626';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+        }
+        return 0;
       }
-      return;
+      teeth = rawVal.split(',').map(s => s.trim()).filter(s => s.length > 0);
     }
 
-    // Parse comma separated numbers
-    const teeth = rawVal.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    if (!teeth.length) {
+      if (statusEl) {
+        statusEl.textContent = '⚠ Vui lòng chọn hoặc nhập số răng';
+        statusEl.style.color = '#dc2626';
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+      }
+      return 0;
+    }
+
     let successCount = 0;
     let failList = [];
 
@@ -730,19 +758,23 @@
     });
 
     if (statusEl) {
-      if (failList.length > 0) {
-        statusEl.textContent = `⚠ Lỗi răng: ${failList.join(', ')}`;
+      if (failList.length > 0 && successCount === 0) {
+        statusEl.textContent = `⚠ Không tìm thấy răng: ${failList.join(', ')}`;
         statusEl.style.color = '#dc2626';
+      } else if (failList.length > 0) {
+        statusEl.textContent = `✓ Đã gắn ${successCount} răng, lỗi: ${failList.join(', ')}`;
+        statusEl.style.color = '#d97706';
       } else {
-        statusEl.textContent = `✓ Đã cập nhật ${successCount} răng`;
+        statusEl.textContent = `✓ Đã gắn ${successCount} răng [${statusText}]`;
         statusEl.style.color = '#16a34a';
-        inputEl.value = ''; // clear on success
       }
 
       setTimeout(() => {
-        statusEl.textContent = '';
+        if (statusEl) statusEl.textContent = '';
       }, 3000);
     }
+
+    return successCount;
   }
 
   /* ==========================================================================
@@ -1452,51 +1484,194 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     const btnTamThanKhongCo = createBtn('btnTamThanKhongCo', 'Không có', '#be123c', massSelectTamThanKhongCo);
     const btnTamThanHTKDY = createBtn('btnTamThanHTKDY', 'Hoàn toàn không đồng ý', '#0f766e', massSelectTamThanHTKDY);
 
-    // RHM UI Builder
+    // RHM UI Builder (Interactive Tooth Chart)
     function createRHMInputGroup() {
       const wrapper = document.createElement('div');
-      wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px;';
+      wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; width: 270px; box-sizing: border-box;';
 
       const header = document.createElement('div');
-      header.textContent = '🦷 Đánh dấu răng (RHM)';
-      header.style.cssText = 'font-size: 12px; font-weight: 600; color: #475569;';
+      header.innerHTML = '<span style="font-size: 12px; font-weight: 700; color: #1e293b;">🦷 Sơ đồ răng (RHM Multi-Select)</span>';
+      header.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
 
+      const selectedTeeth = new Set();
+      const toothButtons = {};
+
+      // Quick Selection Bar
+      const quickBar = document.createElement('div');
+      quickBar.style.cssText = 'display: flex; gap: 3px; justify-content: space-between; margin-bottom: 2px;';
+
+      function makeQuickBtn(label, onClick) {
+        const qBtn = document.createElement('button');
+        qBtn.textContent = label;
+        qBtn.style.cssText = 'flex: 1; padding: 3px 2px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; transition: all 0.15s; white-space: nowrap;';
+        qBtn.addEventListener('mouseenter', () => { qBtn.style.background = '#e2e8f0'; });
+        qBtn.addEventListener('mouseleave', () => { qBtn.style.background = '#f1f5f9'; });
+        qBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          onClick();
+        });
+        return qBtn;
+      }
+
+      function updateUiSync() {
+        const input = document.getElementById('inputTeethRHM');
+        const sorted = Array.from(selectedTeeth);
+        if (input) {
+          input.value = sorted.join(', ');
+        }
+        ALL_TEETH.forEach(t => {
+          const btn = toothButtons[t];
+          if (btn) {
+            if (selectedTeeth.has(t)) {
+              btn.style.background = '#2563eb';
+              btn.style.color = '#ffffff';
+              btn.style.borderColor = '#1d4ed8';
+              btn.style.fontWeight = '700';
+            } else {
+              btn.style.background = '#ffffff';
+              btn.style.color = '#334155';
+              btn.style.borderColor = '#cbd5e1';
+              btn.style.fontWeight = '500';
+            }
+          }
+        });
+      }
+
+      quickBar.appendChild(makeQuickBtn('Hàm trên', () => {
+        TEETH_UPPER.forEach(t => selectedTeeth.add(t));
+        updateUiSync();
+      }));
+      quickBar.appendChild(makeQuickBtn('Hàm dưới', () => {
+        TEETH_LOWER.forEach(t => selectedTeeth.add(t));
+        updateUiSync();
+      }));
+      quickBar.appendChild(makeQuickBtn('Tất cả', () => {
+        ALL_TEETH.forEach(t => selectedTeeth.add(t));
+        updateUiSync();
+      }));
+      quickBar.appendChild(makeQuickBtn('Bỏ chọn', () => {
+        selectedTeeth.clear();
+        updateUiSync();
+      }));
+
+      // Tooth Matrix (Upper and Lower Jaws)
+      const matrixContainer = document.createElement('div');
+      matrixContainer.style.cssText = 'display: flex; flex-direction: column; gap: 4px; background: #ffffff; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0;';
+
+      function renderJawRow(teethList, jawLabel) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
+
+        const label = document.createElement('div');
+        label.textContent = jawLabel;
+        label.style.cssText = 'font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 1px;';
+
+        const grid = document.createElement('div');
+        grid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr) 2px repeat(8, 1fr); gap: 2px; align-items: center;';
+
+        teethList.forEach((t, i) => {
+          if (i === 8) {
+            const sep = document.createElement('div');
+            sep.style.cssText = 'background: #cbd5e1; height: 100%; width: 2px;';
+            grid.appendChild(sep);
+          }
+
+          const tBtn = document.createElement('button');
+          tBtn.textContent = t;
+          tBtn.style.cssText = 'padding: 3px 0; font-size: 9px; font-weight: 500; background: #ffffff; color: #334155; border: 1px solid #cbd5e1; border-radius: 3px; cursor: pointer; text-align: center; line-height: 1; transition: all 0.1s;';
+
+          tBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (selectedTeeth.has(t)) {
+              selectedTeeth.delete(t);
+            } else {
+              selectedTeeth.add(t);
+            }
+            updateUiSync();
+          });
+
+          toothButtons[t] = tBtn;
+          grid.appendChild(tBtn);
+        });
+
+        row.appendChild(label);
+        row.appendChild(grid);
+        return row;
+      }
+
+      matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
+      matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
+
+      // Text input sync
       const input = document.createElement('input');
       input.id = 'inputTeethRHM';
       input.type = 'text';
-      input.placeholder = 'Nhập răng, vd: 17, 18';
-      input.style.cssText = 'padding: 6px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box;';
+      input.placeholder = 'Răng đã chọn: 18, 17, 26...';
+      input.style.cssText = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; outline: none; width: 100%; box-sizing: border-box; background: #fff; font-family: monospace;';
 
-      // Stop clicks inside input from closing the dropdown
+      input.addEventListener('input', () => {
+        const raw = input.value;
+        selectedTeeth.clear();
+        raw.split(',').map(s => s.trim()).filter(s => s.length > 0).forEach(t => {
+          if (ALL_TEETH.includes(t)) selectedTeeth.add(t);
+        });
+        ALL_TEETH.forEach(t => {
+          const btn = toothButtons[t];
+          if (btn) {
+            if (selectedTeeth.has(t)) {
+              btn.style.background = '#2563eb';
+              btn.style.color = '#ffffff';
+              btn.style.borderColor = '#1d4ed8';
+              btn.style.fontWeight = '700';
+            } else {
+              btn.style.background = '#ffffff';
+              btn.style.color = '#334155';
+              btn.style.borderColor = '#cbd5e1';
+              btn.style.fontWeight = '500';
+            }
+          }
+        });
+      });
+
       input.addEventListener('click', (e) => e.stopPropagation());
       input.addEventListener('keydown', (e) => e.stopPropagation());
 
+      // Status action buttons
       const btnRow = document.createElement('div');
-      btnRow.style.cssText = 'display: flex; gap: 4px; justify-content: space-between;';
+      btnRow.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
 
-      function makeMiniBtn(text, color, condition) {
+      function makeStatusBtn(text, color, condition) {
         const btn = document.createElement('button');
         btn.textContent = text;
-        btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 4px 0; cursor: pointer; font-weight: 600;`;
+        btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 5px 0; cursor: pointer; font-weight: 700; transition: opacity 0.15s;`;
+        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.9'; });
+        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
         btn.addEventListener('click', (e) => {
-          e.stopPropagation(); // prevent closing
-          processTeethInput(condition);
+          e.stopPropagation();
+          const list = Array.from(selectedTeeth);
+          processTeethInput(condition, list.length > 0 ? list : null);
         });
         return btn;
       }
 
-      btnRow.appendChild(makeMiniBtn('Sâu', '#ea580c', 'Sâu'));
-      btnRow.appendChild(makeMiniBtn('Mất', '#dc2626', 'Mất'));
-      btnRow.appendChild(makeMiniBtn('Khác', '#9333ea', 'Mất lý do khác'));
+      btnRow.appendChild(makeStatusBtn('🔴 Sâu', '#ea580c', 'Sâu'));
+      btnRow.appendChild(makeStatusBtn('⚫ Mất', '#dc2626', 'Mất'));
+      btnRow.appendChild(makeStatusBtn('🟣 Trám', '#7c3aed', 'Trám'));
+      btnRow.appendChild(makeStatusBtn('🟡 Khác', '#d97706', 'Mất lý do khác'));
 
       const status = document.createElement('div');
       status.id = 'rhmStatusLabel';
       status.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
 
       wrapper.appendChild(header);
+      wrapper.appendChild(quickBar);
+      wrapper.appendChild(matrixContainer);
       wrapper.appendChild(input);
       wrapper.appendChild(btnRow);
       wrapper.appendChild(status);
+
+      wrapper.addEventListener('click', (e) => e.stopPropagation());
+
       return wrapper;
     }
 
