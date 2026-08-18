@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      6.0
-// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, M4, RHM Tooth Chart, Cận Lâm Sàng JSON Importer with Comma Decimals, Kết Luận)
+// @version      6.3
+// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em & NCT JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
 // @match        *://*.medinet.org.vn/*
 // @include      *://quanlyskcd.medinet.org.vn/*
 // @include      *://*.medinet.org.vn/*
-// @allFrames    true
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -76,8 +75,67 @@
   }
 
   /* ==========================================================================
-     SECTION A: HÀNH CHÍNH (ADMINISTRATIVE QUICK FILL)
+     SECTION A: HÀNH CHÍNH (ADMINISTRATIVE QUICK FILL & NCT JSON IMPORTER)
      ========================================================================== */
+
+  function setDateBoxValue(containerEl, dateStr) {
+    if (!containerEl || !dateStr) return false;
+    const dateBoxEl = containerEl.classList.contains('dx-datebox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-datebox') || containerEl);
+
+    let dateObj = null;
+    let formattedStr = String(dateStr).trim();
+
+    if (formattedStr.includes('/')) {
+      const parts = formattedStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        dateObj = new Date(year, month, day);
+      }
+    } else if (formattedStr.includes('-')) {
+      dateObj = new Date(formattedStr);
+    }
+
+    const inst = getDxWidgetInstance(dateBoxEl, 'dxDateBox');
+    if (inst) {
+      try {
+        if (dateObj && !isNaN(dateObj.getTime())) {
+          inst.option('value', dateObj);
+        } else {
+          inst.option('value', formattedStr);
+        }
+        return true;
+      } catch (e) {
+        console.warn('DateBox option set error:', e);
+      }
+    }
+
+    const input = dateBoxEl.querySelector('input.dx-texteditor-input');
+    if (input) {
+      input.value = formattedStr;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function setTagBoxValue(containerEl, textToFind) {
+    if (!containerEl) return false;
+    const tagBoxEl = containerEl.classList.contains('dx-tagbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-tagbox') || containerEl);
+
+    const inst = getDxWidgetInstance(tagBoxEl, 'dxTagBox');
+    if (inst) {
+      return setDxSelectBoxByText(inst, textToFind);
+    }
+    return false;
+  }
 
   function getFieldContainerByLabel(labelText) {
     const wrappers = document.querySelectorAll('.dx-template-wrapper');
@@ -93,18 +151,30 @@
     return null;
   }
 
-  function simulateDropdownSelect(labelText, searchText, retries = 4) {
+  function simulateDropdownSelect(target, searchText, retries = 4) {
     return new Promise(resolve => {
-      const targetContainer = getFieldContainerByLabel(labelText);
+      let targetContainer = null;
+      if (typeof target === 'string') {
+        if (target.startsWith('.') || target.startsWith('#') || target.startsWith('[')) {
+          targetContainer = document.querySelector(target);
+        }
+        if (!targetContainer) {
+          targetContainer = getFieldContainerByLabel(target);
+        }
+      } else if (target && target.nodeType) {
+        targetContainer = target;
+      }
+
       if (!targetContainer) {
-        console.warn(`[Hành chính] Không tìm thấy field: ${labelText}`);
+        console.warn(`[Hành chính] Không tìm thấy field: ${target}`);
         return resolve(false);
       }
 
-      const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox');
-      if (!widget) {
-        console.warn(`[Hành chính] Không tìm thấy dropdown cho: ${labelText}`);
-        return resolve(false);
+      const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox, .dx-tagbox') || targetContainer;
+      const widgetInst = getDxWidgetInstance(widget, widget.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
+      if (widgetInst) {
+        const success = setDxSelectBoxByText(widgetInst, searchText);
+        if (success) return resolve(true);
       }
 
       const dropIcon = widget.querySelector('.dx-dropdowneditor-icon') || widget;
@@ -136,22 +206,43 @@
         } else if (attempts >= retries) {
           clearInterval(interval);
           dropIcon.click();
-          console.warn(`[Hành chính] Không tìm thấy option "${searchText}" trong dropdown ${labelText}`);
+          console.warn(`[Hành chính] Không tìm thấy option "${searchText}" trong dropdown ${target}`);
           resolve(false);
         }
-      }, 500);
+      }, 400);
     });
   }
 
-  function simulateTick(labelText, optionText) {
-    const targetContainer = getFieldContainerByLabel(labelText);
+  function simulateTick(target, optionText) {
+    let targetContainer = null;
+    if (typeof target === 'string') {
+      if (target.startsWith('.') || target.startsWith('#') || target.startsWith('[')) {
+        targetContainer = document.querySelector(target);
+      }
+      if (!targetContainer) {
+        targetContainer = getFieldContainerByLabel(target);
+      }
+    } else if (target && target.nodeType) {
+      targetContainer = target;
+    }
+
     if (!targetContainer) return false;
 
     const radioGroup = targetContainer.querySelector('hradiogroup dx-radio-group, .dx-radiogroup');
     if (radioGroup) {
+      const inst = getDxWidgetInstance(radioGroup, 'dxRadioGroup');
       const btns = radioGroup.querySelectorAll('.dx-radiobutton');
-      for (let btn of btns) {
+      for (let i = 0; i < btns.length; i++) {
+        const btn = btns[i];
         if (btn.textContent.toLowerCase().includes(optionText.toLowerCase())) {
+          if (inst) {
+            try {
+              const items = inst.option('items');
+              if (items && items[i]) {
+                inst.option('value', items[i]);
+              }
+            } catch (e) {}
+          }
           const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
           if (!isChecked) {
             const icon = btn.querySelector('.dx-radiobutton-icon') || btn;
@@ -181,7 +272,7 @@
   }
 
   async function fillHanhChinh() {
-    const btn = document.getElementById('btnHanhChinh');
+    const btn = document.getElementById('btnHanhChinhTreEm') || document.getElementById('btnHanhChinh');
     if (btn) btn.textContent = '⏳ Đang điền...';
 
     await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
@@ -195,15 +286,237 @@
       setTimeout(async () => {
         await simulateDropdownSelect('Trường', 'Đức Trí');
         if (btn) {
-          btn.textContent = '✓ Hành chính';
+          btn.textContent = '✓ Trẻ em';
           btn.style.background = '#059669';
           setTimeout(() => {
-            btn.textContent = 'Hành chính';
+            btn.textContent = '👶 Trẻ em';
             btn.style.background = '#8b5cf6';
           }, 2500);
         }
       }, 600);
     }, 600);
+  }
+
+  async function parseAndFillHanhChinhNCT(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    let count = 0;
+
+    // 1. Số CCCD / CMND (Strict 12 digits)
+    const cccd = data.cccd || data.cmnd || data.so_cccd || data.id_card;
+    if (cccd) {
+      const cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    // 2. Họ và tên (Uppercase)
+    const hoTen = data.ho_ten || data.hoten || data.name || data.fullname;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    // 3. Giới tính (Nam / Nữ)
+    const gioiTinh = data.gioi_tinh || data.gioitinh || data.gender || data.sex;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    // 4. Ngày sinh (dd/MM/yyyy)
+    const ngaySinh = data.ngay_sinh || data.ngaysinh || data.dob || data.birthdate;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    // 5. Chỗ ở hiện tại / Địa chỉ
+    const diaChi = data.dia_chi || data.diachi || data.noi_o_hien_tai || data.address;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    // 6. Số điện thoại (Clean digits)
+    const sdt = data.sdt || data.so_dien_thoai || data.phone || data.dien_thoai_di_dong;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    // 7. Dân tộc (Default: "Kinh")
+    const danToc = data.dan_toc || data.dantoc || data.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    // 8. Xã / Phường (from data or parsed from dia_chi)
+    let xaPhuong = data.xa_phuong || data.xaphuong || data.ward;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    // 9. Standard Form Defaults for Người Cao Tuổi
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Người cao tuổi');
+    }
+
+    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
+    simulateTick(htChiTraEl, 'Ngân sách thành phố');
+
+    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
+    simulateTick(htKhamEl, 'Khám theo hợp đồng');
+
+    return count;
+  }
+
+  function showHanhChinhNCTModal() {
+    let modal = document.getElementById('hanhChinhNCTModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'hanhChinhNCTModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh giấy khám sức khỏe này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+1. "cccd": Số CCCD/Mã định danh (12 chữ số) - Yêu cầu độ chính xác tuyệt đối từng con số.
+2. "dia_chi": Nơi ở hiện tại - Ghi chính xác đầy đủ địa chỉ.
+3. "sdt": Số điện thoại di động - Yêu cầu không được sai sót, chỉ lấy số (loại bỏ dấu chấm, khoảng trắng).
+4. "ho_ten": Viết hoa đầy đủ họ tên có dấu.
+5. "gioi_tinh": "Nam" hoặc "Nữ".
+6. "ngay_sinh": Định dạng dd/mm/yyyy.
+7. "dan_toc": Ghi rõ dân tộc (mặc định "Kinh").
+8. "xa_phuong": Tên Phường/Xã trích xuất từ địa chỉ (nếu có).
+
+Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải thích:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "dan_toc": "Kinh",
+  "cccd": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "sdt": "..."
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧓 Nhập Hành Chính Người Cao Tuổi (JSON AI OCR)</h3>
+            <button id="btnModalCloseXNCT" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptNCT" style="background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaNCT" placeholder='Vd:
+{
+  "ho_ten": "TRẦN CHÍ CƯỜNG",
+  "gioi_tinh": "Nam",
+  "ngay_sinh": "15/07/1988",
+  "dan_toc": "Kinh",
+  "cccd": "074088000275",
+  "dia_chi": "13A KP. Chợ, Lái Thiêu, Hồ Chí Minh",
+  "xa_phuong": "Lái Thiêu",
+  "sdt": "0985282284"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusNCT" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearNCT" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportNCT" style="background: #8b5cf6; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Event Listeners inside modal
+      document.getElementById('btnModalCloseXNCT').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearNCT').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaNCT').value = '';
+        document.getElementById('modalStatusNCT').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptNCT').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportNCT').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaNCT').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusNCT');
+        statusEl.style.color = '#7c3aed';
+        statusEl.textContent = '⏳ Đang điền các thông tin hành chính...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillHanhChinhNCT(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
   }
 
   /* ==========================================================================
@@ -607,12 +920,76 @@
   }
 
   /* ==========================================================================
-     SECTION G: RĂNG HÀM MẶT AUTOMATION (NEW UI & INTERACTIVE TOOTH CHART)
+     SECTION G: RĂNG HÀM MẶT AUTOMATION (NATIVE DENTAL CHART & MULTI-SELECT)
      ========================================================================== */
 
   const TEETH_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
   const TEETH_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
   const ALL_TEETH = [...TEETH_UPPER, ...TEETH_LOWER];
+
+  const RHM_STATUS_CODES = {
+    'binhthuong': '191',
+    'bình thường': '191',
+    'normal': '191',
+    '191': '191',
+
+    'sau': '192',
+    'sâu': '192',
+    'caries': '192',
+    '192': '192',
+
+    'tramsavlai': '193',
+    'trám sâu lại': '193',
+    '193': '193',
+
+    'tramtot': '194',
+    'trám tốt': '194',
+    'tram': '194',
+    'trám': '194',
+    '194': '194',
+
+    'matdosau': '195',
+    'mất do sâu': '195',
+    'mat': '195',
+    'mất': '195',
+    '195': '195',
+
+    'matlydokhac': '196',
+    'mất lý do khác': '196',
+    'khac': '196',
+    'khác': '196',
+    '196': '196',
+
+    'bithoranh': '197',
+    'bít hố rãnh': '197',
+    '197': '197',
+
+    'tru, cau,implant': '198',
+    'trụ, cầu,implant': '198',
+    'implant': '198',
+    '198': '198',
+
+    'chuamoc': '220',
+    'chưa mọc': '220',
+    '220': '220',
+
+    'khongghinhan': '221',
+    'không ghi nhận': '221',
+    '221': '221'
+  };
+
+  const RHM_STATUS_NAMES = {
+    '191': 'Bình thường',
+    '192': 'Sâu',
+    '193': 'Trám sâu lại',
+    '194': 'Trám tốt',
+    '195': 'Mất do sâu',
+    '196': 'Mất lý do khác',
+    '197': 'Bít hố rãnh',
+    '198': 'Trụ, cầu, implant',
+    '220': 'Chưa mọc',
+    '221': 'Không ghi nhận'
+  };
 
   function setDxSelectBoxByText(widgetInstance, textToFind) {
     if (!widgetInstance) return false;
@@ -639,7 +1016,6 @@
         const itemText = (typeof item === 'object' && displayExpr) ? item[displayExpr] : item;
         if (itemText && String(itemText).toLowerCase().includes(textToFind.toLowerCase())) {
           const valToSet = (typeof item === 'object' && valueExpr) ? item[valueExpr] : item;
-          // dxTagBox uses arrays for values
           if (widgetInstance.NAME === 'dxTagBox') {
             let currentVal = widgetInstance.option('value') || [];
             if (!Array.isArray(currentVal)) currentVal = [currentVal];
@@ -658,54 +1034,46 @@
     return false;
   }
 
-  function findToothWidget(toothNumber, rootDoc = document) {
-    // 1. Try DevExtreme field items
+  /**
+   * Find tooth element across native selects, dental cards, and DevExtreme widgets
+   */
+  function findToothElement(toothNumber, rootDoc = document) {
+    const tStr = String(toothNumber).trim();
+
+    // 1. Check native Medinet dental chart select by data-tooth or ID
+    const nativeSelect = rootDoc.querySelector(`select.tooth-select[data-tooth="${tStr}"], select[data-tooth="${tStr}"], #tooth-card-${tStr} select`);
+    if (nativeSelect) return { type: 'native_select', element: nativeSelect };
+
+    // 2. Check tooth card directly
+    const toothCard = rootDoc.getElementById(`tooth-card-${tStr}`) || rootDoc.querySelector(`.tooth-card[data-tooth="${tStr}"]`);
+    if (toothCard) {
+      const sel = toothCard.querySelector('select');
+      if (sel) return { type: 'native_select', element: sel };
+    }
+
+    // 3. Fallback: DevExtreme select box / tagbox (for older legacy forms)
     const fieldItems = rootDoc.querySelectorAll('.dx-field-item');
     for (let field of fieldItems) {
       const label = field.querySelector('.dx-field-item-label-text');
       if (label) {
         const labelText = label.textContent.trim().toLowerCase();
-        const tStr = String(toothNumber).toLowerCase();
         if (labelText === tStr || labelText === `răng ${tStr}` || labelText === `răng số ${tStr}` || labelText.includes(` ${tStr}`)) {
           const widgetEl = field.querySelector('.dx-selectbox, .dx-tagbox');
           if (widgetEl) {
             const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
-            if (inst) return inst;
+            if (inst) return { type: 'dx_widget', instance: inst };
           }
         }
       }
     }
 
-    // 2. Try generic tables/grids or adjacent elements
-    const allLabels = rootDoc.querySelectorAll('label, span, td, div');
-    for (let el of allLabels) {
-      if (el.children.length > 2) continue;
-
-      const text = (el.textContent || '').trim().toLowerCase();
-      const tStr = String(toothNumber).toLowerCase();
-
-      if (text === tStr || text === `răng ${tStr}` || text === `răng số ${tStr}`) {
-        let current = el.parentElement;
-        let depth = 0;
-        while (current && depth < 3) {
-          const widgetEl = current.querySelector('.dx-selectbox, .dx-tagbox');
-          if (widgetEl) {
-            const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
-            if (inst) return inst;
-          }
-          current = current.parentElement;
-          depth++;
-        }
-      }
-    }
-
-    // 3. Search inside iframes if present
+    // 4. Search inside child iframes
     const iframes = rootDoc.querySelectorAll('iframe');
     for (let ifr of iframes) {
       try {
         const ifrDoc = ifr.contentDocument || (ifr.contentWindow && ifr.contentWindow.document);
         if (ifrDoc) {
-          const found = findToothWidget(toothNumber, ifrDoc);
+          const found = findToothElement(toothNumber, ifrDoc);
           if (found) return found;
         }
       } catch (e) {}
@@ -714,7 +1082,62 @@
     return null;
   }
 
-  function processTeethInput(statusText, explicitTeethList = null) {
+  function setToothStatus(toothNumber, statusKeyOrId) {
+    const target = findToothElement(toothNumber);
+    if (!target) return false;
+
+    const normKey = String(statusKeyOrId).trim().toLowerCase();
+    const statusId = RHM_STATUS_CODES[normKey] || statusKeyOrId;
+
+    if (target.type === 'native_select') {
+      const select = target.element;
+      let matchedValue = null;
+
+      // Find matching option in select
+      for (let opt of select.options) {
+        if (opt.value === String(statusId)) {
+          matchedValue = opt.value;
+          break;
+        }
+        if (opt.textContent.toLowerCase().includes(normKey)) {
+          matchedValue = opt.value;
+          break;
+        }
+      }
+
+      if (!matchedValue) matchedValue = String(statusId);
+
+      select.value = matchedValue;
+
+      // Dispatch native change and input events
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Dispatch jQuery change event if jQuery is active
+      const $ = getJQuery();
+      if ($) {
+        try {
+          $(select).val(matchedValue).trigger('change');
+        } catch (e) {}
+      }
+
+      // Update data-status-id attribute on the card
+      const card = select.closest('.tooth-card') || document.getElementById(`tooth-card-${toothNumber}`);
+      if (card) {
+        card.setAttribute('data-status-id', matchedValue);
+      }
+
+      return true;
+    }
+
+    if (target.type === 'dx_widget') {
+      return setDxSelectBoxByText(target.instance, statusKeyOrId);
+    }
+
+    return false;
+  }
+
+  function processTeethInput(statusKeyOrId, explicitTeethList = null) {
     const inputEl = document.getElementById('inputTeethRHM');
     const statusEl = document.getElementById('rhmStatusLabel');
 
@@ -747,15 +1170,12 @@
     let failList = [];
 
     teeth.forEach(t => {
-      const widget = findToothWidget(t);
-      if (widget) {
-        const success = setDxSelectBoxByText(widget, statusText);
-        if (success) successCount++;
-        else failList.push(t);
-      } else {
-        failList.push(t);
-      }
+      const success = setToothStatus(t, statusKeyOrId);
+      if (success) successCount++;
+      else failList.push(t);
     });
+
+    const statusName = RHM_STATUS_NAMES[statusKeyOrId] || statusKeyOrId;
 
     if (statusEl) {
       if (failList.length > 0 && successCount === 0) {
@@ -765,7 +1185,7 @@
         statusEl.textContent = `✓ Đã gắn ${successCount} răng, lỗi: ${failList.join(', ')}`;
         statusEl.style.color = '#d97706';
       } else {
-        statusEl.textContent = `✓ Đã gắn ${successCount} răng [${statusText}]`;
+        statusEl.textContent = `✓ Đã gắn ${successCount} răng [${statusName}]`;
         statusEl.style.color = '#16a34a';
       }
 
@@ -1028,7 +1448,7 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       document.body.appendChild(modal);
 
       // Event Listeners inside modal
-      document.getElementById('btnModalCloseX').addEventListener('click', () => modal.style.display = 'none');
+      document.getElementById('btnModalCloseX').addEventListener('click', () => { modal.style.display = 'none'; });
       document.getElementById('btnModalClear').addEventListener('click', () => {
         document.getElementById('jsonInputArea').value = '';
         document.getElementById('modalStatus').style.display = 'none';
@@ -1270,12 +1690,212 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     return wrapper;
   }
 
+  // RHM UI Builder (Interactive Tooth Chart)
+  function createRHMInputGroup() {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; width: 280px; box-sizing: border-box;';
+
+    const header = document.createElement('div');
+    header.innerHTML = '<span style="font-size: 12px; font-weight: 700; color: #1e293b;">🦷 Sơ đồ răng (RHM Multi-Select)</span>';
+    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+
+    const selectedTeeth = new Set();
+    const toothButtons = {};
+
+    // Quick Selection Bar
+    const quickBar = document.createElement('div');
+    quickBar.style.cssText = 'display: flex; gap: 3px; justify-content: space-between; margin-bottom: 2px;';
+
+    function makeQuickBtn(label, onClick) {
+      const qBtn = document.createElement('button');
+      qBtn.textContent = label;
+      qBtn.style.cssText = 'flex: 1; padding: 3px 2px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; transition: all 0.15s; white-space: nowrap;';
+      qBtn.addEventListener('mouseenter', () => { qBtn.style.background = '#e2e8f0'; });
+      qBtn.addEventListener('mouseleave', () => { qBtn.style.background = '#f1f5f9'; });
+      qBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onClick();
+      });
+      return qBtn;
+    }
+
+    function updateUiSync() {
+      const input = document.getElementById('inputTeethRHM');
+      const sorted = Array.from(selectedTeeth);
+      if (input) {
+        input.value = sorted.join(', ');
+      }
+      ALL_TEETH.forEach(t => {
+        const btn = toothButtons[t];
+        if (btn) {
+          if (selectedTeeth.has(t)) {
+            btn.style.background = '#2563eb';
+            btn.style.color = '#ffffff';
+            btn.style.borderColor = '#1d4ed8';
+            btn.style.fontWeight = '700';
+          } else {
+            btn.style.background = '#ffffff';
+            btn.style.color = '#334155';
+            btn.style.borderColor = '#cbd5e1';
+            btn.style.fontWeight = '500';
+          }
+        }
+      });
+    }
+
+    quickBar.appendChild(makeQuickBtn('Hàm trên', () => {
+      TEETH_UPPER.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Hàm dưới', () => {
+      TEETH_LOWER.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Tất cả', () => {
+      ALL_TEETH.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Bỏ chọn', () => {
+      selectedTeeth.clear();
+      updateUiSync();
+    }));
+
+    // Tooth Matrix (Upper and Lower Jaws)
+    const matrixContainer = document.createElement('div');
+    matrixContainer.style.cssText = 'display: flex; flex-direction: column; gap: 4px; background: #ffffff; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0;';
+
+    function renderJawRow(teethList, jawLabel) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
+
+      const label = document.createElement('div');
+      label.textContent = jawLabel;
+      label.style.cssText = 'font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 1px;';
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr) 2px repeat(8, 1fr); gap: 2px; align-items: center;';
+
+      teethList.forEach((t, i) => {
+        if (i === 8) {
+          const sep = document.createElement('div');
+          sep.style.cssText = 'background: #cbd5e1; height: 100%; width: 2px;';
+          grid.appendChild(sep);
+        }
+
+        const tBtn = document.createElement('button');
+        tBtn.textContent = t;
+        tBtn.style.cssText = 'padding: 3px 0; font-size: 9px; font-weight: 500; background: #ffffff; color: #334155; border: 1px solid #cbd5e1; border-radius: 3px; cursor: pointer; text-align: center; line-height: 1; transition: all 0.1s;';
+
+        tBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (selectedTeeth.has(t)) {
+            selectedTeeth.delete(t);
+          } else {
+            selectedTeeth.add(t);
+          }
+          updateUiSync();
+        });
+
+        toothButtons[t] = tBtn;
+        grid.appendChild(tBtn);
+      });
+
+      row.appendChild(label);
+      row.appendChild(grid);
+      return row;
+    }
+
+    matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
+    matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
+
+    // Text input sync
+    const input = document.createElement('input');
+    input.id = 'inputTeethRHM';
+    input.type = 'text';
+    input.placeholder = 'Răng đã chọn: 18, 17, 26...';
+    input.style.cssText = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; outline: none; width: 100%; box-sizing: border-box; background: #fff; font-family: monospace;';
+
+    input.addEventListener('input', () => {
+      const raw = input.value;
+      selectedTeeth.clear();
+      raw.split(',').map(s => s.trim()).filter(s => s.length > 0).forEach(t => {
+        if (ALL_TEETH.includes(t)) selectedTeeth.add(t);
+      });
+      ALL_TEETH.forEach(t => {
+        const btn = toothButtons[t];
+        if (btn) {
+          if (selectedTeeth.has(t)) {
+            btn.style.background = '#2563eb';
+            btn.style.color = '#ffffff';
+            btn.style.borderColor = '#1d4ed8';
+            btn.style.fontWeight = '700';
+          } else {
+            btn.style.background = '#ffffff';
+            btn.style.color = '#334155';
+            btn.style.borderColor = '#cbd5e1';
+            btn.style.fontWeight = '500';
+          }
+        }
+      });
+    });
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+
+    // Status action buttons
+    function makeStatusBtn(text, color, statusId, label) {
+      const btn = document.createElement('button');
+      btn.textContent = text;
+      btn.title = label || text;
+      btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 10.5px; padding: 5px 2px; cursor: pointer; font-weight: 700; transition: opacity 0.15s; white-space: nowrap; text-align: center;`;
+      btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.85'; });
+      btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const list = Array.from(selectedTeeth);
+        processTeethInput(statusId, list.length > 0 ? list : null);
+      });
+      return btn;
+    }
+
+    const btnRow1 = document.createElement('div');
+    btnRow1.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
+    btnRow1.appendChild(makeStatusBtn('🔴 Sâu', '#ea580c', '192', 'Sâu răng'));
+    btnRow1.appendChild(makeStatusBtn('⚫ Mất', '#dc2626', '195', 'Mất do sâu'));
+    btnRow1.appendChild(makeStatusBtn('🟣 Trám tốt', '#7c3aed', '194', 'Trám tốt'));
+    btnRow1.appendChild(makeStatusBtn('🟣 Trám lại', '#9333ea', '193', 'Trám sâu lại'));
+
+    const btnRow2 = document.createElement('div');
+    btnRow2.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
+    btnRow2.appendChild(makeStatusBtn('🟡 Mất khác', '#d97706', '196', 'Mất lý do khác'));
+    btnRow2.appendChild(makeStatusBtn('🔘 Bít rãnh', '#0891b2', '197', 'Bít hố rãnh'));
+    btnRow2.appendChild(makeStatusBtn('🔵 Implant', '#2563eb', '198', 'Trụ, cầu, implant'));
+    btnRow2.appendChild(makeStatusBtn('🟢 Bình thường', '#059669', '191', 'Bình thường'));
+
+    const status = document.createElement('div');
+    status.id = 'rhmStatusLabel';
+    status.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(quickBar);
+    wrapper.appendChild(matrixContainer);
+    wrapper.appendChild(input);
+    wrapper.appendChild(btnRow1);
+    wrapper.appendChild(btnRow2);
+    wrapper.appendChild(status);
+
+    wrapper.addEventListener('click', (e) => e.stopPropagation());
+
+    return wrapper;
+  }
+
   /* ==========================================================================
      UI BUTTON BAR INJECTION
      ========================================================================== */
 
   function injectButtons() {
     if (document.getElementById('automationPanel')) return;
+    if (!document.body) return;
 
     const container = document.createElement('div');
     container.id = 'automationPanel';
@@ -1364,9 +1984,8 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       });
 
       btn.addEventListener('click', (e) => {
-        // Keep the dropdown open or close it? Let's close it after a button is clicked, after a small delay
         onClick(e);
-        setTimeout(() => { dropdown.style.display = 'none'; }, 2500); // 2.5s allows time for the checkmark flash animation
+        setTimeout(() => { dropdown.style.display = 'none'; }, 2500);
       });
       return btn;
     }
@@ -1396,7 +2015,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
         'align-items: center'
       ].join(';');
 
-      // Invisible bridge wrapper to connect main button and subDropdown seamlessly
       const subDropdown = document.createElement('div');
       subDropdown.style.cssText = [
         'display: none',
@@ -1464,222 +2082,19 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       return { wrapper, subDropdown: subDropdownInner };
     }
 
-    const btnHanhChinh = createBtn('btnHanhChinh', 'Hành chính', '#8b5cf6', fillHanhChinh);
-    const btnFillAll = createBtn('fillAllBtn', 'Fill all', '#059669', fillAll);
-    const btnTai = createBtn('btnTai', 'Tai', '#0284c7', fillTaiHearing);
-    const btnRang = createBtn('btnRang', 'Răng', '#0d9488', fillRang);
-
-    // Tiêm chủng buttons
-    const btnDaTiem = createBtn('btnDaTiem', 'Đã tiêm (Vaccine)', '#2563eb', () => handleVaccineClick('btnDaTiem', 'Đã tiêm (Vaccine)', /^đã\s*tiêm/i));
-    const btnChuaTiem = createBtn('btnChuaTiem', 'Chưa tiêm (Vaccine)', '#d97706', () => handleVaccineClick('btnChuaTiem', 'Chưa tiêm (Vaccine)', /^chưa\s*tiêm/i));
-    const btnKhongNhoRo = createBtn('btnKhongNhoRo', 'Không nhớ (Vaccine)', '#4b5563', () => handleVaccineClick('btnKhongNhoRo', 'Không nhớ (Vaccine)', /^không\s*nhớ\s*rõ/i));
-
-    // Nguoi Cao Tuoi (M4) buttons
-    const btnKhongTienSu = createBtn('btnKhongTienSu', 'Không (tiền sử)', '#dc2626', massSelectKhongTienSu);
-    const btnHauNhuKhong = createBtn('btnHauNhuKhong', 'Hầu Như Không', '#8b5cf6', massSelectHauNhuKhong);
-    const btnCoD8 = createBtn('btnCoD8', 'Có D8', '#ea580c', massSelectCoD8);
-    const btnXetNghiemMau = createBtn('btnXetNghiemMau', '🧪 Xét nghiệm máu', '#0284c7', showBloodTestModal);
-
-    // Tam Than - Tre Em buttons
-    const btnTamThanKhongCo = createBtn('btnTamThanKhongCo', 'Không có', '#be123c', massSelectTamThanKhongCo);
-    const btnTamThanHTKDY = createBtn('btnTamThanHTKDY', 'Hoàn toàn không đồng ý', '#0f766e', massSelectTamThanHTKDY);
-
-    // RHM UI Builder (Interactive Tooth Chart)
-    function createRHMInputGroup() {
-      const wrapper = document.createElement('div');
-      wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; width: 270px; box-sizing: border-box;';
-
-      const header = document.createElement('div');
-      header.innerHTML = '<span style="font-size: 12px; font-weight: 700; color: #1e293b;">🦷 Sơ đồ răng (RHM Multi-Select)</span>';
-      header.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
-
-      const selectedTeeth = new Set();
-      const toothButtons = {};
-
-      // Quick Selection Bar
-      const quickBar = document.createElement('div');
-      quickBar.style.cssText = 'display: flex; gap: 3px; justify-content: space-between; margin-bottom: 2px;';
-
-      function makeQuickBtn(label, onClick) {
-        const qBtn = document.createElement('button');
-        qBtn.textContent = label;
-        qBtn.style.cssText = 'flex: 1; padding: 3px 2px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; transition: all 0.15s; white-space: nowrap;';
-        qBtn.addEventListener('mouseenter', () => { qBtn.style.background = '#e2e8f0'; });
-        qBtn.addEventListener('mouseleave', () => { qBtn.style.background = '#f1f5f9'; });
-        qBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          onClick();
-        });
-        return qBtn;
-      }
-
-      function updateUiSync() {
-        const input = document.getElementById('inputTeethRHM');
-        const sorted = Array.from(selectedTeeth);
-        if (input) {
-          input.value = sorted.join(', ');
-        }
-        ALL_TEETH.forEach(t => {
-          const btn = toothButtons[t];
-          if (btn) {
-            if (selectedTeeth.has(t)) {
-              btn.style.background = '#2563eb';
-              btn.style.color = '#ffffff';
-              btn.style.borderColor = '#1d4ed8';
-              btn.style.fontWeight = '700';
-            } else {
-              btn.style.background = '#ffffff';
-              btn.style.color = '#334155';
-              btn.style.borderColor = '#cbd5e1';
-              btn.style.fontWeight = '500';
-            }
-          }
-        });
-      }
-
-      quickBar.appendChild(makeQuickBtn('Hàm trên', () => {
-        TEETH_UPPER.forEach(t => selectedTeeth.add(t));
-        updateUiSync();
-      }));
-      quickBar.appendChild(makeQuickBtn('Hàm dưới', () => {
-        TEETH_LOWER.forEach(t => selectedTeeth.add(t));
-        updateUiSync();
-      }));
-      quickBar.appendChild(makeQuickBtn('Tất cả', () => {
-        ALL_TEETH.forEach(t => selectedTeeth.add(t));
-        updateUiSync();
-      }));
-      quickBar.appendChild(makeQuickBtn('Bỏ chọn', () => {
-        selectedTeeth.clear();
-        updateUiSync();
-      }));
-
-      // Tooth Matrix (Upper and Lower Jaws)
-      const matrixContainer = document.createElement('div');
-      matrixContainer.style.cssText = 'display: flex; flex-direction: column; gap: 4px; background: #ffffff; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0;';
-
-      function renderJawRow(teethList, jawLabel) {
-        const row = document.createElement('div');
-        row.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
-
-        const label = document.createElement('div');
-        label.textContent = jawLabel;
-        label.style.cssText = 'font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 1px;';
-
-        const grid = document.createElement('div');
-        grid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr) 2px repeat(8, 1fr); gap: 2px; align-items: center;';
-
-        teethList.forEach((t, i) => {
-          if (i === 8) {
-            const sep = document.createElement('div');
-            sep.style.cssText = 'background: #cbd5e1; height: 100%; width: 2px;';
-            grid.appendChild(sep);
-          }
-
-          const tBtn = document.createElement('button');
-          tBtn.textContent = t;
-          tBtn.style.cssText = 'padding: 3px 0; font-size: 9px; font-weight: 500; background: #ffffff; color: #334155; border: 1px solid #cbd5e1; border-radius: 3px; cursor: pointer; text-align: center; line-height: 1; transition: all 0.1s;';
-
-          tBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (selectedTeeth.has(t)) {
-              selectedTeeth.delete(t);
-            } else {
-              selectedTeeth.add(t);
-            }
-            updateUiSync();
-          });
-
-          toothButtons[t] = tBtn;
-          grid.appendChild(tBtn);
-        });
-
-        row.appendChild(label);
-        row.appendChild(grid);
-        return row;
-      }
-
-      matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
-      matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
-
-      // Text input sync
-      const input = document.createElement('input');
-      input.id = 'inputTeethRHM';
-      input.type = 'text';
-      input.placeholder = 'Răng đã chọn: 18, 17, 26...';
-      input.style.cssText = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; outline: none; width: 100%; box-sizing: border-box; background: #fff; font-family: monospace;';
-
-      input.addEventListener('input', () => {
-        const raw = input.value;
-        selectedTeeth.clear();
-        raw.split(',').map(s => s.trim()).filter(s => s.length > 0).forEach(t => {
-          if (ALL_TEETH.includes(t)) selectedTeeth.add(t);
-        });
-        ALL_TEETH.forEach(t => {
-          const btn = toothButtons[t];
-          if (btn) {
-            if (selectedTeeth.has(t)) {
-              btn.style.background = '#2563eb';
-              btn.style.color = '#ffffff';
-              btn.style.borderColor = '#1d4ed8';
-              btn.style.fontWeight = '700';
-            } else {
-              btn.style.background = '#ffffff';
-              btn.style.color = '#334155';
-              btn.style.borderColor = '#cbd5e1';
-              btn.style.fontWeight = '500';
-            }
-          }
-        });
-      });
-
-      input.addEventListener('click', (e) => e.stopPropagation());
-      input.addEventListener('keydown', (e) => e.stopPropagation());
-
-      // Status action buttons
-      const btnRow = document.createElement('div');
-      btnRow.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
-
-      function makeStatusBtn(text, color, condition) {
-        const btn = document.createElement('button');
-        btn.textContent = text;
-        btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 5px 0; cursor: pointer; font-weight: 700; transition: opacity 0.15s;`;
-        btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.9'; });
-        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const list = Array.from(selectedTeeth);
-          processTeethInput(condition, list.length > 0 ? list : null);
-        });
-        return btn;
-      }
-
-      btnRow.appendChild(makeStatusBtn('🔴 Sâu', '#ea580c', 'Sâu'));
-      btnRow.appendChild(makeStatusBtn('⚫ Mất', '#dc2626', 'Mất'));
-      btnRow.appendChild(makeStatusBtn('🟣 Trám', '#7c3aed', 'Trám'));
-      btnRow.appendChild(makeStatusBtn('🟡 Khác', '#d97706', 'Mất lý do khác'));
-
-      const status = document.createElement('div');
-      status.id = 'rhmStatusLabel';
-      status.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
-
-      wrapper.appendChild(header);
-      wrapper.appendChild(quickBar);
-      wrapper.appendChild(matrixContainer);
-      wrapper.appendChild(input);
-      wrapper.appendChild(btnRow);
-      wrapper.appendChild(status);
-
-      wrapper.addEventListener('click', (e) => e.stopPropagation());
-
-      return wrapper;
-    }
-
-    // Append buttons to dropdown
-    dropdown.appendChild(btnHanhChinh);
+    // 0. Hành chính Sub-menu
+    const menuHanhChinh = createSubMenu('Hành chính', '#8b5cf6');
+    const btnHanhChinhTreEm = createBtn('btnHanhChinhTreEm', '👶 Trẻ em', '#8b5cf6', fillHanhChinh);
+    const btnHanhChinhNCT = createBtn('btnHanhChinhNCT', '🧓 Người Cao Tuổi', '#7c3aed', showHanhChinhNCTModal);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhTreEm);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhNCT);
+    dropdown.appendChild(menuHanhChinh.wrapper);
 
     // 1. Khám Lâm sàng Sub-menu
     const menuKhamLamSang = createSubMenu('Khám Lâm sàng', '#0f766e');
+    const btnFillAll = createBtn('fillAllBtn', 'Fill all', '#059669', fillAll);
+    const btnTai = createBtn('btnTai', 'Tai', '#0284c7', fillTaiHearing);
+    const btnRang = createBtn('btnRang', 'Răng', '#0d9488', fillRang);
     menuKhamLamSang.subDropdown.appendChild(btnFillAll);
     menuKhamLamSang.subDropdown.appendChild(btnTai);
     menuKhamLamSang.subDropdown.appendChild(btnRang);
@@ -1687,6 +2102,9 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
 
     // 2. Vaccine Sub-menu
     const menuVaccine = createSubMenu('Vaccine', '#0369a1');
+    const btnDaTiem = createBtn('btnDaTiem', 'Đã tiêm (Vaccine)', '#2563eb', () => handleVaccineClick('btnDaTiem', 'Đã tiêm (Vaccine)', /^đã\s*tiêm/i));
+    const btnChuaTiem = createBtn('btnChuaTiem', 'Chưa tiêm (Vaccine)', '#d97706', () => handleVaccineClick('btnChuaTiem', 'Chưa tiêm (Vaccine)', /^chưa\s*tiêm/i));
+    const btnKhongNhoRo = createBtn('btnKhongNhoRo', 'Không nhớ (Vaccine)', '#4b5563', () => handleVaccineClick('btnKhongNhoRo', 'Không nhớ (Vaccine)', /^không\s*nhớ\s*rõ/i));
     menuVaccine.subDropdown.appendChild(btnDaTiem);
     menuVaccine.subDropdown.appendChild(btnChuaTiem);
     menuVaccine.subDropdown.appendChild(btnKhongNhoRo);
@@ -1694,6 +2112,9 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
 
     // 3. Không (Tiền sử) Sub-menu
     const menuKhong = createSubMenu('Không', '#be123c');
+    const btnKhongTienSu = createBtn('btnKhongTienSu', 'Không (tiền sử)', '#dc2626', massSelectKhongTienSu);
+    const btnHauNhuKhong = createBtn('btnHauNhuKhong', 'Hầu Như Không', '#8b5cf6', massSelectHauNhuKhong);
+    const btnCoD8 = createBtn('btnCoD8', 'Có D8', '#ea580c', massSelectCoD8);
     menuKhong.subDropdown.appendChild(btnKhongTienSu);
     menuKhong.subDropdown.appendChild(btnHauNhuKhong);
     menuKhong.subDropdown.appendChild(btnCoD8);
@@ -1706,16 +2127,19 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
 
     // 5. Tâm thần - trẻ em Sub-menu
     const menuTamThan = createSubMenu('Tâm thần - trẻ em', '#9333ea');
+    const btnTamThanKhongCo = createBtn('btnTamThanKhongCo', 'Không có', '#be123c', massSelectTamThanKhongCo);
+    const btnTamThanHTKDY = createBtn('btnTamThanHTKDY', 'Hoàn toàn không đồng ý', '#0f766e', massSelectTamThanHTKDY);
     menuTamThan.subDropdown.appendChild(btnTamThanKhongCo);
     menuTamThan.subDropdown.appendChild(btnTamThanHTKDY);
     dropdown.appendChild(menuTamThan.wrapper);
 
-    // 6. Kết Luận Sub-menu (Pure Addition)
+    // 6. Kết Luận Sub-menu
     const menuKetLuan = createSubMenu('Kết Luận', '#059669');
     menuKetLuan.subDropdown.appendChild(createKetLuanInputGroup());
     dropdown.appendChild(menuKetLuan.wrapper);
 
-    // Xet nghiem mau is a standalone button
+    // 7. Xét nghiệm máu (Standalone button)
+    const btnXetNghiemMau = createBtn('btnXetNghiemMau', '🧪 Xét nghiệm máu', '#0284c7', showBloodTestModal);
     dropdown.appendChild(btnXetNghiemMau);
 
     container.appendChild(toggleBtn);
