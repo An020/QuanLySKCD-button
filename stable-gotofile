@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      6.4
-// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em & NCT JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
+// @version      6.5
+// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em, NCT & Học Sinh Có Người Giám Hộ JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
 // @match        *://*.medinet.org.vn/*
@@ -507,6 +507,329 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
           if (filled > 0) {
             statusEl.style.color = '#059669';
             statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  async function parseAndFillHocSinhGiamHo(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    let count = 0;
+
+    // 1. Số CCCD / Mã định danh học sinh (12 chữ số)
+    const cccd = data.cccd || data.cmnd || data.so_cccd || data.id_card || data.dinh_danh;
+    if (cccd) {
+      const cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    // 2. Họ và tên học sinh (Uppercase)
+    const hoTen = data.ho_ten || data.hoten || data.name || data.fullname;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    // 3. Giới tính (Nam / Nữ)
+    const gioiTinh = data.gioi_tinh || data.gioitinh || data.gender || data.sex;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    // 4. Ngày sinh (dd/MM/yyyy)
+    const ngaySinh = data.ngay_sinh || data.ngaysinh || data.dob || data.birthdate;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    // 5. Số thẻ BHYT
+    const bhyt = data.bhyt || data.so_the_bhyt || data.so_bhyt || data.the_bhyt;
+    if (bhyt) {
+      const cleanBhyt = String(bhyt).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+      const el = document.querySelector('.BHYT, [class*="BHYT"]');
+      if (el && setTextBoxValue(el, cleanBhyt)) count++;
+    }
+
+    // 6. Số điện thoại học sinh / liên hệ
+    const sdt = data.sdt || data.so_dien_thoai || data.phone || data.dien_thoai_di_dong;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    // 7. Nơi ở hiện tại / Chỗ ở hiện tại
+    const diaChi = data.dia_chi || data.diachi || data.noi_o_hien_tai || data.address;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    // 8. Xã / Phường nơi ở (từ JSON hoặc parse từ địa chỉ)
+    let xaPhuong = data.xa_phuong || data.xaphuong || data.ward;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    // 9. Dân tộc (Default: "Kinh")
+    const danToc = data.dan_toc || data.dantoc || data.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    // 10. Lý do khám sức khỏe
+    const lyDo = data.ly_do_kham || data.reason || 'Khám sức khỏe định kỳ';
+    const lyDoEl = document.querySelector('.LyDoKhamSK, [class*="LyDoKhamSK"]');
+    if (lyDoEl && setTextBoxValue(lyDoEl, lyDo)) count++;
+
+    // 11. Trẻ có đi học -> "Có"
+    const diHocEl = document.querySelector('.TreEm_DangDiHoc, [class*="TreEm_DangDiHoc"]');
+    if (simulateTick(diHocEl, 'Có')) count++;
+
+    // 12. Xã phường trường học
+    const xaPhuongTruong = data.xa_phuong_truong || xaPhuong;
+    if (xaPhuongTruong) {
+      const xaTruongEl = document.querySelector('.TreEm_XaPhuong, [class*="TreEm_XaPhuong"]');
+      if (xaTruongEl) {
+        await simulateDropdownSelect(xaTruongEl, xaPhuongTruong);
+        count++;
+      }
+    }
+
+    // 13. Tên trường học
+    const tenTruong = data.ten_truong || data.truong || data.school_name || data.school;
+    if (tenTruong) {
+      const truongEl = document.querySelector('.TreEm_TruongHocId, [class*="TreEm_TruongHocId"]');
+      if (truongEl) {
+        await new Promise(r => setTimeout(r, 600));
+        await simulateDropdownSelect(truongEl, tenTruong);
+        count++;
+      }
+    }
+
+    // 14. Lớp học
+    const lop = data.lop || data.class || data.lop_hoc;
+    if (lop) {
+      const lopEl = document.querySelector('.TreEm_Lop, [class*="TreEm_Lop"]');
+      if (lopEl && setTextBoxValue(lopEl, String(lop).trim())) count++;
+    }
+
+    // 15. Địa chỉ trường
+    const diaChiTruong = data.dia_chi_truong || data.school_address;
+    if (diaChiTruong) {
+      const dcTruongEl = document.querySelector('.TreEm_DiaChiTruong, [class*="TreEm_DiaChiTruong"]');
+      if (dcTruongEl) setTextBoxValue(dcTruongEl, String(diaChiTruong).trim());
+    }
+
+    // 16. Người giám hộ (Họ và tên mẹ hoặc người giám hộ)
+    const nguoiGiamHo = data.nguoi_giam_ho || data.ho_ten_giam_ho || data.guardian_name || data.ten_me || data.ten_cha;
+    if (nguoiGiamHo) {
+      const nghEl = document.querySelector('.TreEm_NguoiGiamHo, [class*="TreEm_NguoiGiamHo"]');
+      if (nghEl && setTextBoxValue(nghEl, String(nguoiGiamHo).trim())) count++;
+    }
+
+    // 17. CCCD người giám hộ
+    const cccdGiamHo = data.cccd_giam_ho || data.cccd_me || data.cccd_cha || data.guardian_id;
+    if (cccdGiamHo) {
+      const cleanCccdGiamHo = String(cccdGiamHo).replace(/[^0-9]/g, '');
+      const cccdGHEl = document.querySelector('.TreEm_CCCD_NguoiGiamHo, [class*="TreEm_CCCD_NguoiGiamHo"]');
+      if (cccdGHEl && setTextBoxValue(cccdGHEl, cleanCccdGiamHo)) count++;
+    }
+
+    // 18. Mối quan hệ với trẻ (Mẹ / Cha / Ông/bà / Anh/chị / Họ hàng / Khác)
+    const moiQuanHe = data.moi_quan_he || data.relationship || 'Mẹ';
+    const mqhEl = document.querySelector('.TreEm_MQH_NguoiGiamHo, [class*="TreEm_MQH_NguoiGiamHo"]');
+    if (mqhEl) {
+      await simulateDropdownSelect(mqhEl, moiQuanHe);
+      count++;
+    }
+
+    // 19. SĐT người giám hộ
+    const sdtGiamHo = data.sdt_giam_ho || data.sdt || data.phone;
+    if (sdtGiamHo) {
+      const cleanSdtGH = String(sdtGiamHo).replace(/[^0-9+]/g, '');
+      const sdtGHEl = document.querySelector('.TreEm_SDT_NguoiGiamHo, [class*="TreEm_SDT_NguoiGiamHo"]');
+      if (sdtGHEl && setTextBoxValue(sdtGHEl, cleanSdtGH)) count++;
+    }
+
+    // 20. Form defaults (Đối tượng khám, Địa điểm khám, Hình thức chi trả, Hình thức khám)
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Trẻ từ đủ 6 tuổi');
+    }
+
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
+    simulateTick(htChiTraEl, 'Ngân sách thành phố');
+
+    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
+    simulateTick(htKhamEl, 'Khám theo hợp đồng');
+
+    return count;
+  }
+
+  function showHocSinhGiamHoModal() {
+    let modal = document.getElementById('hocSinhGiamHoModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'hocSinhGiamHoModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh giấy khám sức khỏe học sinh này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG (YÊU CẦU ĐỘ CHÍNH XÁC TUYỆT ĐỐI TỪNG KÝ TỰ/CHỮ SỐ):
+1. "ho_ten": Viết in hoa đầy đủ họ và tên học sinh có dấu (Mục 1).
+2. "gioi_tinh": "Nam" hoặc "Nữ" (Mục 2).
+3. "ngay_sinh": Ngày tháng năm sinh định dạng dd/mm/yyyy (Mục 3).
+4. "cccd": Số CCCD/Mã định danh/Hộ chiếu của học sinh - Yêu cầu chính xác 100% các chữ số (Mục 6).
+5. "bhyt": Số thẻ BHYT của học sinh - Yêu cầu chính xác 100% các chữ số/ký tự (Mục 7).
+6. "dia_chi": Nơi ở hiện tại của học sinh - Ghi chính xác đầy đủ địa chỉ (Mục 8).
+7. "xa_phuong": Tên Phường/Xã trích xuất từ nơi ở hoặc địa chỉ (nếu có).
+8. "ten_truong": Tên trường học (Mục 10).
+9. "lop": Lớp học của học sinh (nếu có, ví dụ: "2.2").
+10. "dia_chi_truong": Địa chỉ trường học (Mục 11).
+11. "nguoi_giam_ho": Họ và tên mẹ hoặc người giám hộ (Mục 12).
+12. "cccd_giam_ho": Số CCCD của mẹ hoặc người giám hộ (Mục 12) - Yêu cầu chính xác 100% các chữ số.
+13. "moi_quan_he": Mối quan hệ với trẻ (Mục 13) - Ví dụ: "Mẹ", "Cha", "Ông/bà",...
+14. "sdt": Số điện thoại di động (Mục 14) - Chỉ lấy các chữ số, không được sai sót.
+
+Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời giải thích nào:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "cccd": "...",
+  "bhyt": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "ten_truong": "...",
+  "lop": "...",
+  "dia_chi_truong": "...",
+  "nguoi_giam_ho": "...",
+  "cccd_giam_ho": "...",
+  "moi_quan_he": "...",
+  "sdt": "..."
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #2563eb, #1d4ed8); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🎓 Nhập Hành Chính Học Sinh Có Người Giám Hộ (JSON AI OCR)</h3>
+            <button id="btnModalCloseXHSGH" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptHSGH" style="background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaHSGH" placeholder='Vd:
+{
+  "ho_ten": "ĐINH GIA BẢO",
+  "gioi_tinh": "Nam",
+  "ngay_sinh": "06/10/2017",
+  "cccd": "067217003235",
+  "bhyt": "6721315435",
+  "dia_chi": "17/B1, khu phố 3, P. An Phú",
+  "xa_phuong": "An Phú",
+  "ten_truong": "Trường TH An Phú 2",
+  "lop": "2.2",
+  "dia_chi_truong": "Số 298/3, đường An Phú 35, tổ 14, KP2, Phường An Phú",
+  "nguoi_giam_ho": "Đinh Thị Nhiệm",
+  "cccd_giam_ho": "037186011691",
+  "moi_quan_he": "Mẹ",
+  "sdt": "0896129649"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusHSGH" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearHSGH" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportHSGH" style="background: #2563eb; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Event Listeners inside modal
+      document.getElementById('btnModalCloseXHSGH').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearHSGH').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaHSGH').value = '';
+        document.getElementById('modalStatusHSGH').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptHSGH').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR Học Sinh!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportHSGH').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaHSGH').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusHSGH');
+        statusEl.style.color = '#2563eb';
+        statusEl.textContent = '⏳ Đang điền các thông tin học sinh & người giám hộ...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillHocSinhGiamHo(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính học sinh!`;
             setTimeout(() => { modal.style.display = 'none'; }, 1500);
           } else {
             statusEl.style.color = '#dc2626';
@@ -2113,8 +2436,10 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     const menuHanhChinh = createSubMenu('Hành chính', '#8b5cf6');
     const btnHanhChinhTreEm = createBtn('btnHanhChinhTreEm', '👶 Trẻ em', '#8b5cf6', fillHanhChinh);
     const btnHanhChinhNCT = createBtn('btnHanhChinhNCT', '🧓 Người Cao Tuổi', '#7c3aed', showHanhChinhNCTModal);
+    const btnHanhChinhHSCNGH = createBtn('btnHanhChinhHSCNGH', '🎓 Học Sinh Có Người Giám Hộ', '#2563eb', showHocSinhGiamHoModal);
     menuHanhChinh.subDropdown.appendChild(btnHanhChinhTreEm);
     menuHanhChinh.subDropdown.appendChild(btnHanhChinhNCT);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhHSCNGH);
     dropdown.appendChild(menuHanhChinh.wrapper);
 
     // 1. Khám Lâm sàng Sub-menu
