@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      6.6
+// @version      6.7
 // @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em, NCT & Học Sinh Có Người Giám Hộ JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
@@ -2013,7 +2013,7 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
   }
 
   /* ==========================================================================
-     SECTION J: KẾT LUẬN (ĐỀ NGHỊ) AUTOMATION
+     SECTION J: KẾT LUẬN (ĐỀ NGHỊ & TƯ VẤN) AUTOMATION
      ========================================================================== */
 
   const KET_LUAN_PHRASES = [
@@ -2022,7 +2022,9 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     { key: 'mat', label: 'Mắt', full: 'Khám CK Mắt' },
     { key: 'rhm', label: 'RHM', full: 'Khám CK Răng Hàm Mặt' },
     { key: 'tmh', label: 'TMH', full: 'Khám CK Tai Mũi Họng' },
-    { key: 'tamthan', label: 'Tâm thần', full: 'Khám CK Tâm thần - vận động' }
+    { key: 'thankinh', label: 'Thần kinh', full: 'Khám CK Tâm thần - vận động' },
+    { key: 'gaycoi', label: 'Gầy Còi', full: 'Bồi bổ thêm chất đạm, chất khoáng' },
+    { key: 'beophi', label: 'Béo Phì', full: 'Điều chỉnh chế độ ăn, tập thể dục' }
   ];
 
   function fillKetLuanDeNghi(selectedKeys) {
@@ -2057,16 +2059,22 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       return phrasesToFill.length;
     }
 
+    const txtArea = container.querySelector('textarea, input');
+    if (txtArea) {
+      setTextBoxValue(container, phrasesToFill.join('\n'));
+      return phrasesToFill.length;
+    }
+
     return 0;
   }
 
   function createKetLuanInputGroup() {
     const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; width: 170px;';
+    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; width: 190px; box-sizing: border-box;';
 
     const header = document.createElement('div');
-    header.textContent = '📋 Đề nghị chuyên khoa';
-    header.style.cssText = 'font-size: 12px; font-weight: 600; color: #475569;';
+    header.textContent = '📋 Đề nghị & Lời khuyên';
+    header.style.cssText = 'font-size: 12px; font-weight: 700; color: #334155;';
 
     const selectedKeys = new Set();
 
@@ -2076,7 +2084,7 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     KET_LUAN_PHRASES.forEach(p => {
       const chip = document.createElement('button');
       chip.textContent = p.label;
-      chip.style.cssText = 'padding: 5px 4px; font-size: 11px; font-weight: 600; border: 1px solid #cbd5e1; background: #ffffff; color: #334155; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; text-align: center;';
+      chip.style.cssText = 'padding: 5px 3px; font-size: 11px; font-weight: 600; border: 1px solid #cbd5e1; background: #ffffff; color: #334155; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
 
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -2087,9 +2095,9 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
           chip.style.borderColor = '#cbd5e1';
         } else {
           selectedKeys.add(p.key);
-          chip.style.background = '#3b82f6';
+          chip.style.background = '#2563eb';
           chip.style.color = '#ffffff';
-          chip.style.borderColor = '#2563eb';
+          chip.style.borderColor = '#1d4ed8';
         }
       });
 
@@ -2101,13 +2109,13 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
 
     const confirmBtn = document.createElement('button');
     confirmBtn.textContent = '✓ Điền Đề Nghị';
-    confirmBtn.style.cssText = 'background: #059669; color: white; border: none; border-radius: 4px; font-size: 11px; padding: 6px 0; cursor: pointer; font-weight: 700; margin-top: 2px; width: 100%; transition: background 0.2s;';
+    confirmBtn.style.cssText = 'background: #059669; color: white; border: none; border-radius: 4px; font-size: 11.5px; padding: 6px 0; cursor: pointer; font-weight: 700; margin-top: 2px; width: 100%; transition: background 0.2s;';
 
     confirmBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const keysArray = Array.from(selectedKeys);
       if (!keysArray.length) {
-        statusLabel.textContent = '⚠ Chọn ít nhất 1 đề nghị';
+        statusLabel.textContent = '⚠ Chọn ít nhất 1 mục';
         statusLabel.style.color = '#dc2626';
         setTimeout(() => { statusLabel.textContent = ''; }, 2500);
         return;
@@ -2115,7 +2123,7 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
 
       const count = fillKetLuanDeNghi(keysArray);
       if (count > 0) {
-        statusLabel.textContent = `✓ Đã điền ${count} đề nghị`;
+        statusLabel.textContent = `✓ Đã điền ${count} mục`;
         statusLabel.style.color = '#16a34a';
         confirmBtn.style.background = '#047857';
         setTimeout(() => {
