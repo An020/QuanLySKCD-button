@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      6.7
+// @version      6.9
 // @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em, NCT & Học Sinh Có Người Giám Hộ JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
@@ -14,8 +14,6 @@
 
 (function () {
   'use strict';
-
-  // Universal selectors are now used instead of hardcoded sections
 
   function getJQuery() {
     return window.jQuery || window.$ || (typeof unsafeWindow !== 'undefined' ? (unsafeWindow.jQuery || unsafeWindow.$) : null);
@@ -132,7 +130,7 @@
     if (!containerEl || !dateStr) return false;
     const dateBoxEl = containerEl.classList.contains('dx-datebox')
       ? containerEl
-      : (containerEl.querySelector('.dx-datebox') || containerEl);
+      : (containerEl.querySelector('.dx-datebox, dx-date-box') || containerEl);
 
     let dateObj = null;
     let formattedStr = String(dateStr).trim();
@@ -143,34 +141,51 @@
         const day = parseInt(parts[0], 10);
         const month = parseInt(parts[1], 10) - 1;
         const year = parseInt(parts[2], 10);
-        dateObj = new Date(year, month, day);
+        dateObj = new Date(year, month, day, 0, 0, 0);
       }
     } else if (formattedStr.includes('-')) {
-      dateObj = new Date(formattedStr);
+      const parts = formattedStr.split('-');
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 0, 0, 0);
+        } else {
+          dateObj = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10), 0, 0, 0);
+        }
+      } else {
+        dateObj = new Date(formattedStr);
+      }
     }
 
-    const input = dateBoxEl.querySelector('input.dx-texteditor-input');
+    const isoStr = (dateObj && !isNaN(dateObj.getTime()))
+      ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}T00:00:00`
+      : formattedStr;
+
+    const displayStr = (dateObj && !isNaN(dateObj.getTime()))
+      ? `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`
+      : formattedStr;
+
+    const input = dateBoxEl.querySelector('input.dx-texteditor-input') || (dateBoxEl.tagName === 'INPUT' ? dateBoxEl : null);
     if (input) {
       input.focus();
       const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
       if (nativeSetter) {
-        nativeSetter.call(input, formattedStr);
+        nativeSetter.call(input, displayStr);
       } else {
-        input.value = formattedStr;
+        input.value = displayStr;
       }
       input.dispatchEvent(new Event('focus', { bubbles: true }));
-      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: formattedStr }));
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: displayStr }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
       input.dispatchEvent(new Event('blur', { bubbles: true }));
     }
 
-    const inst = getDxWidgetInstance(dateBoxEl, 'dxDateBox');
+    const inst = getDxWidgetInstance(dateBoxEl, 'dxDateBox') || getDxWidgetInstance(containerEl, 'dxDateBox');
     if (inst) {
       try {
         if (dateObj && !isNaN(dateObj.getTime())) {
           inst.option('value', dateObj);
         } else {
-          inst.option('value', formattedStr);
+          inst.option('value', isoStr);
         }
         inst.option('isValid', true);
         if (typeof inst.validate === 'function') inst.validate();
@@ -180,6 +195,7 @@
     }
 
     dateBoxEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+    containerEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
     return true;
   }
 
@@ -357,6 +373,25 @@
       }
     }
 
+    // 3. Any direct radio / checkbox / item in container
+    const anyItems = targetContainer.querySelectorAll('.dx-radiobutton, .dx-checkbox, .dx-list-item, [role="radio"], [role="option"], [role="checkbox"]');
+    for (let i = 0; i < anyItems.length; i++) {
+      const item = anyItems[i];
+      const text = item.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (text.includes(cleanOption) || cleanOption.includes(text)) {
+        triggerClick(item);
+        targetContainer.classList.remove('dx-invalid');
+        return true;
+      }
+    }
+
+    // 4. Fallback: SelectBox if container is a dropdown
+    const selectBox = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox');
+    if (selectBox) {
+      simulateDropdownSelect(targetContainer, optionText);
+      return true;
+    }
+
     return false;
   }
 
@@ -387,8 +422,8 @@
 
     await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
     await simulateDropdownSelect('Địa điểm khám', 'Khám Lưu Động');
-    simulateTick('Hình thức chi trả khám sức khỏe', 'Ngân sách thành phố');
-    simulateTick('Hình thức khám', 'Khám theo hợp đồng');
+    simulateTick('Hình thức chi trả khám sức khỏe', 'Ngân sách');
+    simulateTick('Hình thức khám', 'Hợp đồng');
     simulateTick('Trẻ có đi học', 'Có');
 
     setTimeout(async () => {
@@ -407,6 +442,17 @@
     }, 600);
   }
 
+  function normalizeObjectKeys(obj) {
+    if (!obj || typeof obj !== 'object') return {};
+    const clean = {};
+    for (let k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      clean[cleanKey] = obj[k];
+    }
+    return clean;
+  }
+
   async function parseAndFillHanhChinhNCT(jsonInput) {
     let data;
     try {
@@ -417,18 +463,20 @@
       return false;
     }
 
+    const norm = normalizeObjectKeys(data);
     let count = 0;
 
     // 1. Số CCCD / CMND (Strict 12 digits)
-    const cccd = data.cccd || data.cmnd || data.so_cccd || data.id_card;
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.cccdidnumber || data.cccd;
     if (cccd) {
-      const cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
       const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
       if (el && setTextBoxValue(el, cleanCccd)) count++;
     }
 
     // 2. Họ và tên (Uppercase)
-    const hoTen = data.ho_ten || data.hoten || data.name || data.fullname;
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
     if (hoTen) {
       const upperName = String(hoTen).trim().toUpperCase();
       const el = document.querySelector('.HoTen, [class*="HoTen"]');
@@ -436,7 +484,7 @@
     }
 
     // 3. Giới tính (Nam / Nữ)
-    const gioiTinh = data.gioi_tinh || data.gioitinh || data.gender || data.sex;
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
     if (gioiTinh) {
       const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
       const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
@@ -444,21 +492,21 @@
     }
 
     // 4. Ngày sinh (dd/MM/yyyy)
-    const ngaySinh = data.ngay_sinh || data.ngaysinh || data.dob || data.birthdate;
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
     if (ngaySinh) {
       const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
       if (el && setDateBoxValue(el, String(ngaySinh))) count++;
     }
 
     // 5. Chỗ ở hiện tại / Địa chỉ
-    const diaChi = data.dia_chi || data.diachi || data.noi_o_hien_tai || data.address;
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
     if (diaChi) {
       const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
       if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
     }
 
     // 6. Số điện thoại (Clean digits)
-    const sdt = data.sdt || data.so_dien_thoai || data.phone || data.dien_thoai_di_dong;
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
     if (sdt) {
       const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
       const el = document.querySelector('.SDT, [class*="SDT"]');
@@ -466,13 +514,13 @@
     }
 
     // 7. Dân tộc (Default: "Kinh")
-    const danToc = data.dan_toc || data.dantoc || data.ethnicity || 'Kinh';
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
     const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
     await simulateDropdownSelect(danTocEl, danToc);
     count++;
 
     // 8. Xã / Phường (from data or parsed from dia_chi)
-    let xaPhuong = data.xa_phuong || data.xaphuong || data.ward;
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
     if (!xaPhuong && diaChi) {
       const lower = diaChi.toLowerCase();
       if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
@@ -503,10 +551,10 @@
     }
 
     const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
-    simulateTick(htChiTraEl, 'Ngân sách thành phố');
+    simulateTick(htChiTraEl, 'Ngân sách');
 
     const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
-    simulateTick(htKhamEl, 'Khám theo hợp đồng');
+    simulateTick(htKhamEl, 'Hợp đồng');
 
     refreshFormValidation();
 
@@ -641,18 +689,20 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
       return false;
     }
 
+    const norm = normalizeObjectKeys(data);
     let count = 0;
 
     // 1. Số CCCD / Mã định danh học sinh (12 chữ số)
-    const cccd = data.cccd || data.cmnd || data.so_cccd || data.id_card || data.dinh_danh;
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.dinhdanh || norm.cccdidnumber || data.cccd;
     if (cccd) {
-      const cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
       const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
       if (el && setTextBoxValue(el, cleanCccd)) count++;
     }
 
     // 2. Họ và tên học sinh (Uppercase)
-    const hoTen = data.ho_ten || data.hoten || data.name || data.fullname;
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
     if (hoTen) {
       const upperName = String(hoTen).trim().toUpperCase();
       const el = document.querySelector('.HoTen, [class*="HoTen"]');
@@ -660,7 +710,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 3. Giới tính (Nam / Nữ)
-    const gioiTinh = data.gioi_tinh || data.gioitinh || data.gender || data.sex;
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
     if (gioiTinh) {
       const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
       const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
@@ -668,14 +718,14 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 4. Ngày sinh (dd/MM/yyyy)
-    const ngaySinh = data.ngay_sinh || data.ngaysinh || data.dob || data.birthdate;
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
     if (ngaySinh) {
       const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
       if (el && setDateBoxValue(el, String(ngaySinh))) count++;
     }
 
     // 5. Số thẻ BHYT
-    const bhyt = data.bhyt || data.so_the_bhyt || data.so_bhyt || data.the_bhyt;
+    const bhyt = norm.bhyt || norm.sothebhyt || norm.sobhyt || norm.thebhyt || data.bhyt;
     if (bhyt) {
       const cleanBhyt = String(bhyt).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
       const el = document.querySelector('.BHYT, [class*="BHYT"]');
@@ -683,7 +733,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 6. Số điện thoại học sinh / liên hệ
-    const sdt = data.sdt || data.so_dien_thoai || data.phone || data.dien_thoai_di_dong;
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
     if (sdt) {
       const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
       const el = document.querySelector('.SDT, [class*="SDT"]');
@@ -691,14 +741,14 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 7. Nơi ở hiện tại / Chỗ ở hiện tại
-    const diaChi = data.dia_chi || data.diachi || data.noi_o_hien_tai || data.address;
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
     if (diaChi) {
       const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
       if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
     }
 
     // 8. Xã / Phường nơi ở (từ JSON hoặc parse từ địa chỉ)
-    let xaPhuong = data.xa_phuong || data.xaphuong || data.ward;
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
     if (!xaPhuong && diaChi) {
       const lower = diaChi.toLowerCase();
       if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
@@ -719,13 +769,13 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 9. Dân tộc (Default: "Kinh")
-    const danToc = data.dan_toc || data.dantoc || data.ethnicity || 'Kinh';
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
     const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
     await simulateDropdownSelect(danTocEl, danToc);
     count++;
 
     // 10. Lý do khám sức khỏe
-    const lyDo = data.ly_do_kham || data.reason || 'Khám sức khỏe định kỳ';
+    const lyDo = norm.lydokham || norm.reason || 'Khám sức khỏe định kỳ';
     const lyDoEl = document.querySelector('.LyDoKhamSK, [class*="LyDoKhamSK"]');
     if (lyDoEl && setTextBoxValue(lyDoEl, lyDo)) count++;
 
@@ -734,7 +784,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     if (simulateTick(diHocEl, 'Có')) count++;
 
     // 12. Xã phường trường học
-    const xaPhuongTruong = data.xa_phuong_truong || xaPhuong;
+    const xaPhuongTruong = norm.xaphuongtruong || xaPhuong;
     if (xaPhuongTruong) {
       const xaTruongEl = document.querySelector('.TreEm_XaPhuong, [class*="TreEm_XaPhuong"]');
       if (xaTruongEl) {
@@ -744,7 +794,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 13. Tên trường học
-    const tenTruong = data.ten_truong || data.truong || data.school_name || data.school;
+    const tenTruong = norm.tentruong || norm.truong || norm.schoolname || norm.school || data.ten_truong;
     if (tenTruong) {
       const truongEl = document.querySelector('.TreEm_TruongHocId, [class*="TreEm_TruongHocId"]');
       if (truongEl) {
@@ -755,51 +805,45 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     }
 
     // 14. Lớp học
-    const lop = data.lop || data.class || data.lop_hoc;
+    const lop = norm.lop || norm.class || norm.lophoc || data.lop;
     if (lop) {
       const lopEl = document.querySelector('.TreEm_Lop, [class*="TreEm_Lop"]');
       if (lopEl && setTextBoxValue(lopEl, String(lop).trim())) count++;
     }
 
-    // 15. Địa chỉ trường
-    const diaChiTruong = data.dia_chi_truong || data.school_address;
-    if (diaChiTruong) {
-      const dcTruongEl = document.querySelector('.TreEm_DiaChiTruong, [class*="TreEm_DiaChiTruong"]');
-      if (dcTruongEl) setTextBoxValue(dcTruongEl, String(diaChiTruong).trim());
-    }
-
-    // 16. Người giám hộ (Họ và tên mẹ hoặc người giám hộ)
-    const nguoiGiamHo = data.nguoi_giam_ho || data.ho_ten_giam_ho || data.guardian_name || data.ten_me || data.ten_cha;
+    // 15. Người giám hộ (Họ và tên mẹ hoặc người giám hộ)
+    const nguoiGiamHo = norm.nguoigiamho || norm.hotengiamho || norm.guardianname || norm.nameoftheguardian || norm.tenme || norm.tencha || data.nguoi_giam_ho;
     if (nguoiGiamHo) {
       const nghEl = document.querySelector('.TreEm_NguoiGiamHo, [class*="TreEm_NguoiGiamHo"]');
       if (nghEl && setTextBoxValue(nghEl, String(nguoiGiamHo).trim())) count++;
     }
 
-    // 17. CCCD người giám hộ
-    const cccdGiamHo = data.cccd_giam_ho || data.cccd_me || data.cccd_cha || data.guardian_id;
+    // 16. CCCD người giám hộ (Strict 12 digits)
+    const cccdGiamHo = norm.cccdgiamho || norm.cccdme || norm.cccdcha || norm.guardianid || norm.cccdidguardian || norm.cccdnguoigiamho || data.cccd_giam_ho;
     if (cccdGiamHo) {
-      const cleanCccdGiamHo = String(cccdGiamHo).replace(/[^0-9]/g, '');
+      let cleanCccdGiamHo = String(cccdGiamHo).replace(/[^0-9]/g, '');
+      if (cleanCccdGiamHo.length === 11) cleanCccdGiamHo = cleanCccdGiamHo.padStart(12, '0');
       const cccdGHEl = document.querySelector('.TreEm_CCCD_NguoiGiamHo, [class*="TreEm_CCCD_NguoiGiamHo"]');
       if (cccdGHEl && setTextBoxValue(cccdGHEl, cleanCccdGiamHo)) count++;
     }
 
-    // 18. Mối quan hệ với trẻ (Mẹ / Cha / Ông/bà / Anh/chị / Họ hàng / Khác)
-    const moiQuanHe = data.moi_quan_he || data.relationship || 'Mẹ';
+    // 17. Mối quan hệ với trẻ (Mẹ / Cha / Ông/bà / Anh/chị / Họ hàng / Khác)
+    const moiQuanHe = norm.moiquanhe || norm.relationship || 'Mẹ';
     const mqhEl = document.querySelector('.TreEm_MQH_NguoiGiamHo, [class*="TreEm_MQH_NguoiGiamHo"]');
     if (mqhEl) {
       await simulateDropdownSelect(mqhEl, moiQuanHe);
       count++;
     }
 
-    // 19. SĐT người giám hộ
-    const sdtGiamHo = data.sdt_giam_ho || data.sdt || data.phone;
+    // 18. SĐT người giám hộ
+    const sdtGiamHo = norm.sdtgiamho || norm.sdt || norm.phone || norm.phonenumber || data.sdt_giam_ho;
     if (sdtGiamHo) {
       const cleanSdtGH = String(sdtGiamHo).replace(/[^0-9+]/g, '');
       const sdtGHEl = document.querySelector('.TreEm_SDT_NguoiGiamHo, [class*="TreEm_SDT_NguoiGiamHo"]');
       if (sdtGHEl && setTextBoxValue(sdtGHEl, cleanSdtGH)) count++;
     }
 
-    // 20. Form defaults (Đối tượng khám, Địa điểm khám, Hình thức chi trả, Hình thức khám)
+    // 19. Form defaults (Đối tượng khám, Địa điểm khám, Hình thức chi trả, Hình thức khám)
     const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
     if (dtEl) {
       setTagBoxValue(dtEl, 'Trẻ từ đủ 6 tuổi');
@@ -810,10 +854,10 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     await simulateDropdownSelect(ddEl, diaDiemKham);
 
     const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
-    simulateTick(htChiTraEl, 'Ngân sách thành phố');
+    simulateTick(htChiTraEl, 'Ngân sách');
 
     const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
-    simulateTick(htKhamEl, 'Khám theo hợp đồng');
+    simulateTick(htKhamEl, 'Hợp đồng');
 
     refreshFormValidation();
 
@@ -851,11 +895,10 @@ LƯU Ý CỰC KỲ QUAN TRỌNG (YÊU CẦU ĐỘ CHÍNH XÁC TUYỆT ĐỐI T�
 7. "xa_phuong": Tên Phường/Xã trích xuất từ nơi ở hoặc địa chỉ (nếu có).
 8. "ten_truong": Tên trường học (Mục 10).
 9. "lop": Lớp học của học sinh (nếu có, ví dụ: "2.2").
-10. "dia_chi_truong": Địa chỉ trường học (Mục 11).
-11. "nguoi_giam_ho": Họ và tên mẹ hoặc người giám hộ (Mục 12).
-12. "cccd_giam_ho": Số CCCD của mẹ hoặc người giám hộ (Mục 12) - Yêu cầu chính xác 100% các chữ số.
-13. "moi_quan_he": Mối quan hệ với trẻ (Mục 13) - Ví dụ: "Mẹ", "Cha", "Ông/bà",...
-14. "sdt": Số điện thoại di động (Mục 14) - Chỉ lấy các chữ số, không được sai sót.
+10. "nguoi_giam_ho": Họ và tên mẹ hoặc người giám hộ (Mục 12).
+11. "cccd_giam_ho": Số CCCD của mẹ hoặc người giám hộ (Mục 12) - Yêu cầu chính xác 100% các chữ số.
+12. "moi_quan_he": Mối quan hệ với trẻ (Mục 13) - Ví dụ: "Mẹ", "Cha", "Ông/bà",...
+13. "sdt": Số điện thoại di động (Mục 14) - Chỉ lấy các chữ số, không được sai sót.
 
 Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời giải thích nào:
 {
@@ -868,7 +911,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
   "xa_phuong": "...",
   "ten_truong": "...",
   "lop": "...",
-  "dia_chi_truong": "...",
   "nguoi_giam_ho": "...",
   "cccd_giam_ho": "...",
   "moi_quan_he": "...",
@@ -897,7 +939,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
   "xa_phuong": "An Phú",
   "ten_truong": "Trường TH An Phú 2",
   "lop": "2.2",
-  "dia_chi_truong": "Số 298/3, đường An Phú 35, tổ 14, KP2, Phường An Phú",
   "nguoi_giam_ho": "Đinh Thị Nhiệm",
   "cccd_giam_ho": "037186011691",
   "moi_quan_he": "Mẹ",
@@ -1329,7 +1370,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       const firstCol = row.querySelector('td:first-child');
       let firstColText = firstCol ? (firstCol.textContent || firstCol.innerText || '').trim() : '';
 
-      // Strip any trailing dots or spaces
       firstColText = firstColText.replace(/\.$/, '');
 
       if (firstColText === 'D8' || firstColText.startsWith('D8.1') || firstColText.startsWith('D8.2')) {
@@ -1481,9 +1521,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
     return false;
   }
 
-  /**
-   * Find tooth element across native selects, dental cards, and DevExtreme widgets
-   */
   function findToothElement(toothNumber, rootDoc = document) {
     const tStr = String(toothNumber).trim();
 
@@ -1498,7 +1535,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       if (sel) return { type: 'native_select', element: sel };
     }
 
-    // 3. Fallback: DevExtreme select box / tagbox (for older legacy forms)
+    // 3. Fallback: DevExtreme select box / tagbox
     const fieldItems = rootDoc.querySelectorAll('.dx-field-item');
     for (let field of fieldItems) {
       const label = field.querySelector('.dx-field-item-label-text');
@@ -1540,7 +1577,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       const select = target.element;
       let matchedValue = null;
 
-      // Find matching option in select
       for (let opt of select.options) {
         if (opt.value === String(statusId)) {
           matchedValue = opt.value;
@@ -1556,11 +1592,9 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
 
       select.value = matchedValue;
 
-      // Dispatch native change and input events
       select.dispatchEvent(new Event('input', { bubbles: true }));
       select.dispatchEvent(new Event('change', { bubbles: true }));
 
-      // Dispatch jQuery change event if jQuery is active
       const $ = getJQuery();
       if ($) {
         try {
@@ -1568,7 +1602,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
         } catch (e) {}
       }
 
-      // Update data-status-id attribute on the card
       const card = select.closest('.tooth-card') || document.getElementById(`tooth-card-${toothNumber}`);
       if (card) {
         card.setAttribute('data-status-id', matchedValue);
@@ -1671,7 +1704,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
     'wbc': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
     'soluongbachcau': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
 
-    // User Rule: Mid# on 3-part diff lab report maps to "Số lượng bạch cầu trung tính (G/L)" (.SLBC_TrungTinh)
     'trungtinh': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
     'neu': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
     'neutrophil': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
@@ -1743,7 +1775,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       if (el) setTextBoxValue(el, 'Negative');
     });
 
-    // Nitrit -> "Âm Tính"
     const nitritEl = document.querySelector('.NuocTieu_NiTrit, [class*="NuocTieu_NiTrit"]');
     if (nitritEl) {
       const btns = nitritEl.querySelectorAll('.dx-radiobutton');
@@ -1759,7 +1790,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
   function parseAndFillBloodTestJSON(jsonInput) {
     let data;
     try {
-      // Remove any markdown code block fences if present
       let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
       data = JSON.parse(cleanJson);
     } catch (e) {
@@ -1774,7 +1804,6 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       const val = data[rawKey];
       if (val === null || val === undefined || val === '') continue;
 
-      // Normalize key
       const normKey = rawKey.toLowerCase().replace(/[^a-z0-9]/g, '');
       const selectors = BLOOD_TEST_MAP[normKey];
 
@@ -1789,22 +1818,18 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
           let valNum = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
 
           if (!isNaN(valNum)) {
-            // Smart auto unit conversions:
-            // 1. Huyết sắc tố (HGB / Hb / Hemoglobin) * 10: g/dL -> g/L (e.g. 13.5 -> 135)
             if (normKey === 'huyetsacto' || normKey === 'hgb' || normKey === 'hb') {
               if (valNum < 40) {
                 valNum = Math.round(valNum * 10 * 10) / 10;
               }
             }
 
-            // 2. MCHC * 10: g/dL -> g/L (e.g. 33.8 -> 338)
             if (normKey === 'mchc') {
               if (valNum < 50) {
                 valNum = Math.round(valNum * 10 * 10) / 10;
               }
             }
 
-            // 3. Đường máu / Glucose / 18: mg/dL -> mmol/L (e.g. 90 -> 5, 108 -> 6, 95 -> 5.28)
             if (normKey === 'duongmau' || normKey === 'glucose' || normKey === 'glu') {
               if (valNum > 25) {
                 valNum = Math.round((valNum / 18) * 100) / 100;
@@ -1825,9 +1850,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       }
     }
 
-    // Automatically fill non-numeric Urine fields with Negative / Âm Tính
     fillUrineDefaults();
-
     return count;
   }
 
@@ -2147,7 +2170,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     return wrapper;
   }
 
-  // RHM UI Builder (Interactive Tooth Chart)
   function createRHMInputGroup() {
     const wrapper = document.createElement('div');
     wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; width: 280px; box-sizing: border-box;';
@@ -2159,7 +2181,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     const selectedTeeth = new Set();
     const toothButtons = {};
 
-    // Quick Selection Bar
     const quickBar = document.createElement('div');
     quickBar.style.cssText = 'display: flex; gap: 3px; justify-content: space-between; margin-bottom: 2px;';
 
@@ -2217,7 +2238,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       updateUiSync();
     }));
 
-    // Tooth Matrix (Upper and Lower Jaws)
     const matrixContainer = document.createElement('div');
     matrixContainer.style.cssText = 'display: flex; flex-direction: column; gap: 4px; background: #ffffff; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0;';
 
@@ -2265,7 +2285,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
     matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
 
-    // Text input sync
     const input = document.createElement('input');
     input.id = 'inputTeethRHM';
     input.type = 'text';
@@ -2299,7 +2318,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     input.addEventListener('click', (e) => e.stopPropagation());
     input.addEventListener('keydown', (e) => e.stopPropagation());
 
-    // Status action buttons
     function makeStatusBtn(text, color, statusId, label) {
       const btn = document.createElement('button');
       btn.textContent = text;
@@ -2364,7 +2382,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       'font-family: system-ui, -apple-system, sans-serif'
     ].join(';');
 
-    // Main Toggle Button
     const toggleBtn = document.createElement('button');
     toggleBtn.textContent = '⚙️ SKCD Tools';
     toggleBtn.style.cssText = [
@@ -2381,7 +2398,6 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       'white-space: nowrap'
     ].join(';');
 
-    // Dropdown Container
     const dropdown = document.createElement('div');
     dropdown.style.cssText = [
       'display: none',
@@ -2399,12 +2415,10 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       'min-width: 160px'
     ].join(';');
 
-    // Toggle Dropdown
     toggleBtn.addEventListener('click', () => {
       dropdown.style.display = dropdown.style.display === 'none' ? 'flex' : 'none';
     });
 
-    // Close Dropdown when clicking outside
     document.addEventListener('click', (e) => {
       if (!container.contains(e.target)) {
         dropdown.style.display = 'none';
