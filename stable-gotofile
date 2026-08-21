@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Quan Ly SKCD - Fill All Forms
 // @namespace    https://quanlyskcd.medinet.org.vn/
-// @version      6.9
-// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em, NCT & Học Sinh Có Người Giám Hộ JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
+// @version      7.1
+// @description  Floating automation buttons for Medinet KSK Forms (Hành Chính Trẻ Em, NCT, Người Lớn & Học Sinh Có Người Giám Hộ JSON AI OCR, Nhi Khoa, Tai, Răng Sơ Đồ FDI Native Sync, M4, Cận Lâm Sàng JSON Importer, Kết Luận)
 // @author       Antigravity
 // @match        *://quanlyskcd.medinet.org.vn/*
 // @match        *://*.medinet.org.vn/*
@@ -249,7 +249,7 @@
 
       const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox, .dx-tagbox') || targetContainer;
       const widgetInst = getDxWidgetInstance(widget, widget.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
-      
+
       // 1. Direct widget select if available
       if (widgetInst) {
         const success = setDxSelectBoxByText(widgetInst, searchText);
@@ -416,14 +416,21 @@
     });
   }
 
+  function fillHanhChinhChiTraAndHinhThucDefaults() {
+    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
+    simulateTick(htChiTraEl, 'Ngân sách thành phố hỗ trợ') || simulateTick(htChiTraEl, 'Ngân sách');
+
+    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
+    simulateTick(htKhamEl, 'Khám Theo Hợp Đồng') || simulateTick(htKhamEl, 'Hợp đồng');
+  }
+
   async function fillHanhChinh() {
     const btn = document.getElementById('btnHanhChinhTreEm') || document.getElementById('btnHanhChinh');
     if (btn) btn.textContent = '⏳ Đang điền...';
 
     await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
     await simulateDropdownSelect('Địa điểm khám', 'Khám Lưu Động');
-    simulateTick('Hình thức chi trả khám sức khỏe', 'Ngân sách');
-    simulateTick('Hình thức khám', 'Hợp đồng');
+    fillHanhChinhChiTraAndHinhThucDefaults();
     simulateTick('Trẻ có đi học', 'Có');
 
     setTimeout(async () => {
@@ -550,11 +557,7 @@
       setTagBoxValue(dtEl, 'Người cao tuổi');
     }
 
-    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
-    simulateTick(htChiTraEl, 'Ngân sách');
-
-    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
-    simulateTick(htKhamEl, 'Hợp đồng');
+    fillHanhChinhChiTraAndHinhThucDefaults();
 
     refreshFormValidation();
 
@@ -853,11 +856,7 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải th�
     const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
     await simulateDropdownSelect(ddEl, diaDiemKham);
 
-    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
-    simulateTick(htChiTraEl, 'Ngân sách');
-
-    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
-    simulateTick(htKhamEl, 'Hợp đồng');
+    fillHanhChinhChiTraAndHinhThucDefaults();
 
     refreshFormValidation();
 
@@ -985,6 +984,293 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
           if (filled > 0) {
             statusEl.style.color = '#059669';
             statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính học sinh!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  async function parseAndFillNguoiLon(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    const norm = normalizeObjectKeys(data);
+    let count = 0;
+
+    // 1. Số CCCD / Mã định danh / Hộ chiếu (12 chữ số) - VITAL
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.dinhdanh || norm.cccdidnumber || data.cccd;
+    if (cccd) {
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    // 2. Họ và tên (Uppercase có dấu) - VITAL
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    // 3. Giới tính (Nam / Nữ) - VITAL
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    // 4. Ngày tháng năm sinh (dd/MM/yyyy) - VITAL
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    // 5. Số thẻ BHYT (nếu có) - VITAL
+    const bhyt = norm.bhyt || norm.sothebhyt || norm.sobhyt || norm.thebhyt || data.bhyt;
+    if (bhyt) {
+      const cleanBhyt = String(bhyt).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+      const el = document.querySelector('.BHYT, [class*="BHYT"]');
+      if (el && setTextBoxValue(el, cleanBhyt)) count++;
+    }
+
+    // 6. Số điện thoại di động - VITAL
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    // 7. Nơi ở hiện tại / Địa chỉ - VITAL
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    // 8. Xã / Phường nơi ở (từ JSON hoặc parse từ địa chỉ) - VITAL
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    // 9. Dân tộc (Default: "Kinh")
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    // 10. Nghề nghiệp - VITAL
+    const ngheNghiep = norm.nghenghiep || norm.occupation || norm.job || data.nghe_nghiep;
+    if (ngheNghiep) {
+      const nnEl = document.querySelector('.NgheNghiepId, [class*="NgheNghiep"], [class*="Nghe_Nghiep"]');
+      if (nnEl) {
+        if (nnEl.classList.contains('dx-selectbox') || nnEl.querySelector('.dx-selectbox')) {
+          await simulateDropdownSelect(nnEl, String(ngheNghiep).trim());
+        } else {
+          setTextBoxValue(nnEl, String(ngheNghiep).trim());
+        }
+        count++;
+      }
+    }
+
+    // 11. Nơi làm việc, học tập - VITAL
+    const noiLamViec = norm.noilamviec || norm.noilamviechoctap || norm.noicongtac || norm.workplace || norm.workplaceplace || data.noi_lam_viec;
+    if (noiLamViec) {
+      const nlvEl = document.querySelector('.NoiCongTac, [class*="NoiCongTac"], .NoiLamViec, [class*="NoiLamViec"]');
+      if (nlvEl) {
+        if (nlvEl.classList.contains('dx-selectbox') || nlvEl.querySelector('.dx-selectbox')) {
+          await simulateDropdownSelect(nlvEl, String(noiLamViec).trim());
+        } else {
+          setTextBoxValue(nlvEl, String(noiLamViec).trim());
+        }
+        count++;
+      }
+    }
+
+    // 12. Lý do khám sức khỏe - VITAL
+    const lyDo = norm.lydokham || norm.lydokhamkhoe || norm.reason || 'Khám sức khỏe định kỳ';
+    const lyDoEl = document.querySelector('.LyDoKham, [class*="LyDoKham"], .LyDoKhamSK, [class*="LyDoKhamSK"]');
+    if (lyDoEl) {
+      const txtArea = lyDoEl.querySelector('textarea.dx-texteditor-input') || (lyDoEl.tagName === 'TEXTAREA' ? lyDoEl : null);
+      if (txtArea) {
+        txtArea.focus();
+        txtArea.value = lyDo;
+        txtArea.dispatchEvent(new Event('input', { bubbles: true }));
+        txtArea.dispatchEvent(new Event('change', { bubbles: true }));
+        txtArea.dispatchEvent(new Event('blur', { bubbles: true }));
+        count++;
+      } else if (setTextBoxValue(lyDoEl, lyDo)) {
+        count++;
+      }
+    }
+
+    // 13. Form defaults (Đối tượng khám, Địa điểm khám, Hình thức chi trả, Hình thức khám)
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Người từ đủ 18 tuổi');
+    }
+
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    fillHanhChinhChiTraAndHinhThucDefaults();
+
+    refreshFormValidation();
+
+    return count;
+  }
+
+  function showNguoiLonModal() {
+    let modal = document.getElementById('nguoiLonModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'nguoiLonModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh "GIẤY KHÁM SỨC KHỎE DÙNG CHO NGƯỜI TỪ ĐỦ 18 TUỔI TRỞ LÊN" này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG (YÊU CẦU ĐỘ CHÍNH XÁC TUYỆT ĐỐI TỪNG KÝ TỰ/CHỮ SỐ):
+1. "ho_ten": Viết in hoa đầy đủ họ và tên có dấu (Mục 1). Ví dụ: "NGUYỄN THỊ HUYỀN".
+2. "gioi_tinh": "Nam" hoặc "Nữ" (Mục 2).
+3. "ngay_sinh": Ngày tháng năm sinh định dạng dd/mm/yyyy (Mục 3). Ví dụ: "20/01/1982".
+4. "dan_toc": Ghi rõ dân tộc (Mục 4, mặc định "Kinh" nếu để trống).
+5. "cccd": Số CCCD/Mã định danh/Hộ chiếu (Mục 6) - Yêu cầu chính xác 100% đủ 12 chữ số.
+6. "bhyt": Số thẻ BHYT (Mục 7, để trống nếu không có).
+7. "dia_chi": Nơi ở hiện tại - Ghi chính xác đầy đủ địa chỉ (Mục 8). Ví dụ: "A4089, Bình Đức, Lái Thiêu".
+8. "xa_phuong": Tên Phường/Xã trích xuất từ nơi ở hoặc địa chỉ (Ví dụ: "Lái Thiêu", "An Phú", "Thuận Giao", "Bình Chuẩn",...).
+9. "nghe_nghiep": Nghề nghiệp (Mục 9). Ví dụ: "Lao động tự do".
+10. "noi_lam_viec": Nơi làm việc, học tập (Mục 10, để trống nếu không có).
+11. "sdt": Số điện thoại di động (Mục 11) - Chỉ lấy các chữ số, tuyệt đối không được sai sót.
+12. "ly_do_kham": Lý do khám sức khỏe (Mục 12, mặc định "Khám sức khỏe định kỳ").
+
+Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời giải thích nào:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "dan_toc": "Kinh",
+  "cccd": "...",
+  "bhyt": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "nghe_nghiep": "...",
+  "noi_lam_viec": "...",
+  "sdt": "...",
+  "ly_do_kham": "Khám sức khỏe định kỳ"
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #0284c7, #0369a1); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧑 Nhập Hành Chính Người Lớn (>=18 Tuổi JSON AI OCR)</h3>
+            <button id="btnModalCloseXNL" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptNL" style="background: #f0f9ff; color: #0284c7; border: 1px solid #bae6fd; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaNL" placeholder='Vd:
+{
+  "ho_ten": "NGUYỄN THỊ HUYỀN",
+  "gioi_tinh": "Nữ",
+  "ngay_sinh": "20/01/1982",
+  "dan_toc": "Kinh",
+  "cccd": "037182004541",
+  "bhyt": "",
+  "dia_chi": "A4089, Bình Đức, Lái Thiêu",
+  "xa_phuong": "Lái Thiêu",
+  "nghe_nghiep": "Lao động tự do",
+  "noi_lam_viec": "",
+  "sdt": "0909592004",
+  "ly_do_kham": "Khám sức khỏe định kỳ"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusNL" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearNL" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportNL" style="background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      // Event Listeners inside modal
+      document.getElementById('btnModalCloseXNL').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearNL').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaNL').value = '';
+        document.getElementById('modalStatusNL').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptNL').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR Người Lớn!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportNL').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaNL').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusNL');
+        statusEl.style.color = '#0284c7';
+        statusEl.textContent = '⏳ Đang điền các thông tin người lớn...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillNguoiLon(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính người lớn!`;
             setTimeout(() => { modal.style.display = 'none'; }, 1500);
           } else {
             statusEl.style.color = '#dc2626';
@@ -2558,9 +2844,11 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
     const btnHanhChinhTreEm = createBtn('btnHanhChinhTreEm', '👶 Trẻ em', '#8b5cf6', fillHanhChinh);
     const btnHanhChinhNCT = createBtn('btnHanhChinhNCT', '🧓 Người Cao Tuổi', '#7c3aed', showHanhChinhNCTModal);
     const btnHanhChinhHSCNGH = createBtn('btnHanhChinhHSCNGH', '🎓 Học Sinh Có Người Giám Hộ', '#2563eb', showHocSinhGiamHoModal);
+    const btnHanhChinhNguoiLon = createBtn('btnHanhChinhNguoiLon', '🧑 Người Lớn (>= 18t)', '#0284c7', showNguoiLonModal);
     menuHanhChinh.subDropdown.appendChild(btnHanhChinhTreEm);
     menuHanhChinh.subDropdown.appendChild(btnHanhChinhNCT);
     menuHanhChinh.subDropdown.appendChild(btnHanhChinhHSCNGH);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhNguoiLon);
     dropdown.appendChild(menuHanhChinh.wrapper);
 
     // 1. Khám Lâm sàng Sub-menu
