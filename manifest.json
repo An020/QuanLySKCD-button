@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Quan Ly SKCD - Automation Tools",
+  "version": "7.1.0",
+  "description": "Floating automation tools for Medinet KSK Forms (Hành Chính, Nhi Khoa, Tai, Răng, Vaccine, Lab OCR, Kết Luận)",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://quanlyskcd.medinet.org.vn/*",
+        "*://*.medinet.org.vn/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ]
+}

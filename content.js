@@ -1,0 +1,2839 @@
+(function () {
+  'use strict';
+
+  function getJQuery() {
+    return window.jQuery || window.$ || (typeof unsafeWindow !== 'undefined' ? (unsafeWindow.jQuery || unsafeWindow.$) : null);
+  }
+
+  /**
+   * Safe multi-method lookup for DevExtreme widget instances
+   */
+  function getDxWidgetInstance(el, widgetName) {
+    if (!el) return null;
+    const $ = getJQuery();
+
+    // 1. jQuery plugin method
+    try {
+      if ($ && typeof $(el)[widgetName] === 'function') {
+        const inst = $(el)[widgetName]('instance');
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 2. DevExpress global API
+    try {
+      const DevExpress = window.DevExpress || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.DevExpress : null);
+      if (DevExpress && DevExpress.ui && DevExpress.ui[widgetName]) {
+        const inst = DevExpress.ui[widgetName].getInstance(el);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    // 3. jQuery data attribute
+    try {
+      if ($) {
+        const inst = $(el).data(widgetName);
+        if (inst) return inst;
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  /**
+   * Robust native click simulation
+   */
+  function triggerClick(el) {
+    if (!el) return;
+    ['mouseenter', 'mousedown', 'mouseup', 'click'].forEach(evtName => {
+      const evt = new MouseEvent(evtName, {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      });
+      el.dispatchEvent(evt);
+    });
+    if (typeof el.click === 'function') {
+      el.click();
+    }
+  }
+
+  /* ==========================================================================
+     SECTION A: HÀNH CHÍNH (ADMINISTRATIVE QUICK FILL & NCT JSON IMPORTER)
+     ========================================================================== */
+
+  function setTextBoxValue(containerEl, valueStr) {
+    if (!containerEl) return false;
+    const txtBoxEl = containerEl.classList.contains('dx-textbox') || containerEl.classList.contains('dx-autocomplete')
+      ? containerEl
+      : (containerEl.querySelector('.dx-textbox, .dx-autocomplete') || containerEl);
+
+    const strVal = valueStr === null || valueStr === undefined ? '' : String(valueStr);
+    const input = txtBoxEl.querySelector('input.dx-texteditor-input') || (txtBoxEl.tagName === 'INPUT' ? txtBoxEl : null);
+
+    // 1. Native human-typing event emulation on the input element
+    if (input) {
+      input.focus();
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, strVal);
+      } else {
+        input.value = strVal;
+      }
+
+      input.dispatchEvent(new Event('focus', { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'a' }));
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: strVal }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, cancelable: true, key: 'a' }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+
+    // 2. DevExtreme widget option & validation sync
+    const inst = getDxWidgetInstance(txtBoxEl, 'dxTextBox') || getDxWidgetInstance(txtBoxEl, 'dxAutocomplete');
+    if (inst) {
+      try {
+        inst.option('value', strVal);
+        inst.option('isValid', true);
+        if (typeof inst.validate === 'function') inst.validate();
+      } catch (e) {}
+    }
+
+    // 3. Clear invalid badges and validation tags
+    txtBoxEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+    const validatorEl = txtBoxEl.closest('.dx-validator') || txtBoxEl.querySelector('.dx-validator');
+    if (validatorEl) {
+      const vInst = getDxWidgetInstance(validatorEl, 'dxValidator');
+      if (vInst && typeof vInst.validate === 'function') {
+        try { vInst.validate(); } catch (e) {}
+      }
+    }
+
+    return true;
+  }
+
+  function setDateBoxValue(containerEl, dateStr) {
+    if (!containerEl || !dateStr) return false;
+    const dateBoxEl = containerEl.classList.contains('dx-datebox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-datebox, dx-date-box') || containerEl);
+
+    let dateObj = null;
+    let formattedStr = String(dateStr).trim();
+
+    if (formattedStr.includes('/')) {
+      const parts = formattedStr.split('/');
+      if (parts.length === 3) {
+        const day = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const year = parseInt(parts[2], 10);
+        dateObj = new Date(year, month, day, 0, 0, 0);
+      }
+    } else if (formattedStr.includes('-')) {
+      const parts = formattedStr.split('-');
+      if (parts.length === 3) {
+        if (parts[0].length === 4) {
+          dateObj = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 0, 0, 0);
+        } else {
+          dateObj = new Date(parseInt(parts[2], 10), parseInt(parts[1], 10) - 1, parseInt(parts[0], 10), 0, 0, 0);
+        }
+      } else {
+        dateObj = new Date(formattedStr);
+      }
+    }
+
+    const isoStr = (dateObj && !isNaN(dateObj.getTime()))
+      ? `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}T00:00:00`
+      : formattedStr;
+
+    const displayStr = (dateObj && !isNaN(dateObj.getTime()))
+      ? `${String(dateObj.getDate()).padStart(2, '0')}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${dateObj.getFullYear()}`
+      : formattedStr;
+
+    const input = dateBoxEl.querySelector('input.dx-texteditor-input') || (dateBoxEl.tagName === 'INPUT' ? dateBoxEl : null);
+    if (input) {
+      input.focus();
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, displayStr);
+      } else {
+        input.value = displayStr;
+      }
+      input.dispatchEvent(new Event('focus', { bubbles: true }));
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: displayStr }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+
+    const inst = getDxWidgetInstance(dateBoxEl, 'dxDateBox') || getDxWidgetInstance(containerEl, 'dxDateBox');
+    if (inst) {
+      try {
+        if (dateObj && !isNaN(dateObj.getTime())) {
+          inst.option('value', dateObj);
+        } else {
+          inst.option('value', isoStr);
+        }
+        inst.option('isValid', true);
+        if (typeof inst.validate === 'function') inst.validate();
+      } catch (e) {
+        console.warn('DateBox option set error:', e);
+      }
+    }
+
+    dateBoxEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+    containerEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+    return true;
+  }
+
+  function setTagBoxValue(containerEl, textToFind) {
+    if (!containerEl) return false;
+    const tagBoxEl = containerEl.classList.contains('dx-tagbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-tagbox') || containerEl);
+
+    const inst = getDxWidgetInstance(tagBoxEl, 'dxTagBox');
+    if (inst) {
+      const success = setDxSelectBoxByText(inst, textToFind);
+      tagBoxEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+      return success;
+    }
+    return false;
+  }
+
+  function getFieldContainerByLabel(labelText) {
+    const wrappers = document.querySelectorAll('.dx-template-wrapper');
+    for (let w of wrappers) {
+      const labelEl = w.querySelector('b');
+      if (labelEl) {
+        const cleanText = labelEl.textContent.replace(/\*/g, '').trim().toLowerCase();
+        if (cleanText === labelText.toLowerCase()) {
+          return w;
+        }
+      }
+    }
+    return null;
+  }
+
+  function simulateDropdownSelect(target, searchText, retries = 5) {
+    return new Promise(resolve => {
+      let targetContainer = null;
+      if (typeof target === 'string') {
+        if (target.startsWith('.') || target.startsWith('#') || target.startsWith('[')) {
+          targetContainer = document.querySelector(target);
+        }
+        if (!targetContainer) {
+          targetContainer = getFieldContainerByLabel(target);
+        }
+      } else if (target && target.nodeType) {
+        targetContainer = target;
+      }
+
+      if (!targetContainer) {
+        console.warn(`[Hành chính] Không tìm thấy field: ${target}`);
+        return resolve(false);
+      }
+
+      const widget = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox, .dx-dropdownbox, .dx-tagbox') || targetContainer;
+      const widgetInst = getDxWidgetInstance(widget, widget.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
+
+      // 1. Direct widget select if available
+      if (widgetInst) {
+        const success = setDxSelectBoxByText(widgetInst, searchText);
+        if (success) {
+          widget.classList.remove('dx-invalid', 'dx-texteditor-empty');
+          return resolve(true);
+        }
+      }
+
+      // 2. Open dropdown overlay
+      if (widgetInst && typeof widgetInst.open === 'function') {
+        try { widgetInst.open(); } catch (e) {}
+      } else {
+        const dropIcon = widget.querySelector('.dx-dropdowneditor-icon, .dx-dropdowneditor-button') || widget;
+        triggerClick(dropIcon);
+      }
+
+      let attempts = 0;
+      const cleanSearch = searchText.toLowerCase().replace(/\s+/g, ' ').trim();
+
+      const interval = setInterval(() => {
+        attempts++;
+        const overlays = document.querySelectorAll('.dx-overlay-content:not(.dx-state-invisible)');
+        let found = false;
+
+        for (let overlay of overlays) {
+          const items = overlay.querySelectorAll('.dx-list-item');
+          for (let item of items) {
+            const text = item.textContent.replace(/\s+/g, ' ').trim().toLowerCase();
+            if (text.includes(cleanSearch) || cleanSearch.includes(text)) {
+              triggerClick(item);
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+
+        if (found) {
+          clearInterval(interval);
+          if (widgetInst && typeof widgetInst.close === 'function') {
+            try { widgetInst.close(); } catch (e) {}
+          }
+          widget.classList.remove('dx-invalid', 'dx-texteditor-empty');
+          resolve(true);
+        } else if (attempts >= retries) {
+          clearInterval(interval);
+          if (widgetInst && typeof widgetInst.close === 'function') {
+            try { widgetInst.close(); } catch (e) {}
+          }
+          console.warn(`[Hành chính] Không tìm thấy option "${searchText}" trong dropdown ${target}`);
+          resolve(false);
+        }
+      }, 350);
+    });
+  }
+
+  function simulateTick(target, optionText) {
+    let targetContainer = null;
+    if (typeof target === 'string') {
+      if (target.startsWith('.') || target.startsWith('#') || target.startsWith('[')) {
+        targetContainer = document.querySelector(target);
+      }
+      if (!targetContainer) {
+        targetContainer = getFieldContainerByLabel(target);
+      }
+    } else if (target && target.nodeType) {
+      targetContainer = target;
+    }
+
+    if (!targetContainer) return false;
+    const cleanOption = optionText.toLowerCase().replace(/\s+/g, ' ').trim();
+
+    // 1. RadioGroup
+    const radioGroup = targetContainer.querySelector('hradiogroup dx-radio-group, .dx-radiogroup');
+    if (radioGroup) {
+      const inst = getDxWidgetInstance(radioGroup, 'dxRadioGroup');
+      const btns = radioGroup.querySelectorAll('.dx-radiobutton');
+      for (let i = 0; i < btns.length; i++) {
+        const btn = btns[i];
+        const text = btn.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (text.includes(cleanOption) || cleanOption.includes(text)) {
+          if (inst) {
+            try {
+              const items = inst.option('items');
+              if (items && items[i]) {
+                inst.option('value', items[i]);
+              } else {
+                inst.option('value', btn.textContent.trim());
+              }
+              inst.option('isValid', true);
+            } catch (e) {}
+          }
+          const clickTarget = btn.querySelector('.dx-radiobutton-icon, .dx-radio-value-container') || btn;
+          triggerClick(clickTarget);
+          triggerClick(btn);
+          radioGroup.classList.remove('dx-invalid');
+          return true;
+        }
+      }
+    }
+
+    // 2. dxList / List Selection
+    const dxList = targetContainer.querySelector('hlistselection dx-list, .dx-list');
+    if (dxList) {
+      const inst = getDxWidgetInstance(dxList, 'dxList');
+      const items = dxList.querySelectorAll('.dx-list-item');
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const text = item.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+        if (text.includes(cleanOption) || cleanOption.includes(text)) {
+          if (inst && typeof inst.selectItem === 'function') {
+            try { inst.selectItem(i); } catch (e) {}
+          }
+          const clickTarget = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-select-radiobutton') || item;
+          triggerClick(clickTarget);
+          triggerClick(item);
+          dxList.classList.remove('dx-invalid');
+          return true;
+        }
+      }
+    }
+
+    // 3. Any direct radio / checkbox / item in container
+    const anyItems = targetContainer.querySelectorAll('.dx-radiobutton, .dx-checkbox, .dx-list-item, [role="radio"], [role="option"], [role="checkbox"]');
+    for (let i = 0; i < anyItems.length; i++) {
+      const item = anyItems[i];
+      const text = item.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+      if (text.includes(cleanOption) || cleanOption.includes(text)) {
+        triggerClick(item);
+        targetContainer.classList.remove('dx-invalid');
+        return true;
+      }
+    }
+
+    // 4. Fallback: SelectBox if container is a dropdown
+    const selectBox = targetContainer.querySelector('hselectbox dx-select-box, .dx-selectbox');
+    if (selectBox) {
+      simulateDropdownSelect(targetContainer, optionText);
+      return true;
+    }
+
+    return false;
+  }
+
+  function refreshFormValidation() {
+    try {
+      const DevExpress = window.DevExpress || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.DevExpress : null);
+      if (DevExpress && DevExpress.validationEngine) {
+        if (typeof DevExpress.validationEngine.validateGroup === 'function') {
+          DevExpress.validationEngine.validateGroup();
+        }
+        if (typeof DevExpress.validationEngine.validateDefault === 'function') {
+          DevExpress.validationEngine.validateDefault();
+        }
+      }
+    } catch (e) {}
+
+    document.querySelectorAll('.dx-invalid').forEach(el => {
+      const input = el.querySelector('input.dx-texteditor-input');
+      if (input && input.value && input.value.trim().length > 0) {
+        el.classList.remove('dx-invalid', 'dx-texteditor-empty');
+      }
+    });
+  }
+
+  function fillHanhChinhChiTraAndHinhThucDefaults() {
+    const htChiTraEl = document.querySelector('.HinhThucChiTraKhamSK, [class*="HinhThucChiTraKhamSK"]') || 'Hình thức chi trả khám sức khỏe';
+    simulateTick(htChiTraEl, 'Ngân sách thành phố hỗ trợ') || simulateTick(htChiTraEl, 'Ngân sách');
+
+    const htKhamEl = document.querySelector('.HinhThucChiTraKhamSK_ChiTiet, [class*="HinhThucChiTraKhamSK_ChiTiet"]') || 'Hình thức khám';
+    simulateTick(htKhamEl, 'Khám Theo Hợp Đồng') || simulateTick(htKhamEl, 'Hợp đồng');
+  }
+
+  async function fillHanhChinh() {
+    const btn = document.getElementById('btnHanhChinhTreEm') || document.getElementById('btnHanhChinh');
+    if (btn) btn.textContent = '⏳ Đang điền...';
+
+    await simulateDropdownSelect('Đối tượng khám', 'Trẻ từ đủ 6 tuổi');
+    await simulateDropdownSelect('Địa điểm khám', 'Khám Lưu Động');
+    fillHanhChinhChiTraAndHinhThucDefaults();
+    simulateTick('Trẻ có đi học', 'Có');
+
+    setTimeout(async () => {
+      await simulateDropdownSelect('Xã phường', 'Thuận Giao');
+      setTimeout(async () => {
+        await simulateDropdownSelect('Trường', 'Đức Trí');
+        if (btn) {
+          btn.textContent = '✓ Trẻ em';
+          btn.style.background = '#059669';
+          setTimeout(() => {
+            btn.textContent = '👶 Trẻ em';
+            btn.style.background = '#8b5cf6';
+          }, 2500);
+        }
+      }, 600);
+    }, 600);
+  }
+
+  function normalizeObjectKeys(obj) {
+    if (!obj || typeof obj !== 'object') return {};
+    const clean = {};
+    for (let k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+      clean[cleanKey] = obj[k];
+    }
+    return clean;
+  }
+
+  async function parseAndFillHanhChinhNCT(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    const norm = normalizeObjectKeys(data);
+    let count = 0;
+
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.cccdidnumber || data.cccd;
+    if (cccd) {
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Người cao tuổi');
+    }
+
+    fillHanhChinhChiTraAndHinhThucDefaults();
+    refreshFormValidation();
+
+    return count;
+  }
+
+  function showHanhChinhNCTModal() {
+    let modal = document.getElementById('hanhChinhNCTModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'hanhChinhNCTModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh giấy khám sức khỏe này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+1. "cccd": Số CCCD/Mã định danh (12 chữ số) - Yêu cầu độ chính xác tuyệt đối từng con số.
+2. "dia_chi": Nơi ở hiện tại - Ghi chính xác đầy đủ địa chỉ.
+3. "sdt": Số điện thoại di động - Yêu cầu không được sai sót, chỉ lấy số (loại bỏ dấu chấm, khoảng trắng).
+4. "ho_ten": Viết hoa đầy đủ họ tên có dấu.
+5. "gioi_tinh": "Nam" hoặc "Nữ".
+6. "ngay_sinh": Định dạng dd/mm/yyyy.
+7. "dan_toc": Ghi rõ dân tộc (mặc định "Kinh").
+8. "xa_phuong": Tên Phường/Xã trích xuất từ địa chỉ (nếu có).
+
+Chỉ trả về JSON thuần túy theo mẫu sau, không thêm lời giải thích:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "dan_toc": "Kinh",
+  "cccd": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "sdt": "..."
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #8b5cf6, #6d28d9); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧓 Nhập Hành Chính Người Cao Tuổi (JSON AI OCR)</h3>
+            <button id="btnModalCloseXNCT" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptNCT" style="background: #f5f3ff; color: #7c3aed; border: 1px solid #ddd6fe; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaNCT" placeholder='Vd:
+{
+  "ho_ten": "TRẦN CHÍ CƯỜNG",
+  "gioi_tinh": "Nam",
+  "ngay_sinh": "15/07/1988",
+  "dan_toc": "Kinh",
+  "cccd": "074088000275",
+  "dia_chi": "13A KP. Chợ, Lái Thiêu, Hồ Chí Minh",
+  "xa_phuong": "Lái Thiêu",
+  "sdt": "0985282284"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusNCT" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearNCT" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportNCT" style="background: #8b5cf6; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('btnModalCloseXNCT').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearNCT').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaNCT').value = '';
+        document.getElementById('modalStatusNCT').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptNCT').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportNCT').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaNCT').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusNCT');
+        statusEl.style.color = '#7c3aed';
+        statusEl.textContent = '⏳ Đang điền các thông tin hành chính...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillHanhChinhNCT(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  async function parseAndFillHocSinhGiamHo(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    const norm = normalizeObjectKeys(data);
+    let count = 0;
+
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.dinhdanh || norm.cccdidnumber || data.cccd;
+    if (cccd) {
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    const bhyt = norm.bhyt || norm.sothebhyt || norm.sobhyt || norm.thebhyt || data.bhyt;
+    if (bhyt) {
+      const cleanBhyt = String(bhyt).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+      const el = document.querySelector('.BHYT, [class*="BHYT"]');
+      if (el && setTextBoxValue(el, cleanBhyt)) count++;
+    }
+
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    const lyDo = norm.lydokham || norm.reason || 'Khám sức khỏe định kỳ';
+    const lyDoEl = document.querySelector('.LyDoKhamSK, [class*="LyDoKhamSK"]');
+    if (lyDoEl && setTextBoxValue(lyDoEl, lyDo)) count++;
+
+    const diHocEl = document.querySelector('.TreEm_DangDiHoc, [class*="TreEm_DangDiHoc"]');
+    if (simulateTick(diHocEl, 'Có')) count++;
+
+    const xaPhuongTruong = norm.xaphuongtruong || xaPhuong;
+    if (xaPhuongTruong) {
+      const xaTruongEl = document.querySelector('.TreEm_XaPhuong, [class*="TreEm_XaPhuong"]');
+      if (xaTruongEl) {
+        await simulateDropdownSelect(xaTruongEl, xaPhuongTruong);
+        count++;
+      }
+    }
+
+    const tenTruong = norm.tentruong || norm.truong || norm.schoolname || norm.school || data.ten_truong;
+    if (tenTruong) {
+      const truongEl = document.querySelector('.TreEm_TruongHocId, [class*="TreEm_TruongHocId"]');
+      if (truongEl) {
+        await new Promise(r => setTimeout(r, 600));
+        await simulateDropdownSelect(truongEl, tenTruong);
+        count++;
+      }
+    }
+
+    const lop = norm.lop || norm.class || norm.lophoc || data.lop;
+    if (lop) {
+      const lopEl = document.querySelector('.TreEm_Lop, [class*="TreEm_Lop"]');
+      if (lopEl && setTextBoxValue(lopEl, String(lop).trim())) count++;
+    }
+
+    const nguoiGiamHo = norm.nguoigiamho || norm.hotengiamho || norm.guardianname || norm.nameoftheguardian || norm.tenme || norm.tencha || data.nguoi_giam_ho;
+    if (nguoiGiamHo) {
+      const nghEl = document.querySelector('.TreEm_NguoiGiamHo, [class*="TreEm_NguoiGiamHo"]');
+      if (nghEl && setTextBoxValue(nghEl, String(nguoiGiamHo).trim())) count++;
+    }
+
+    const cccdGiamHo = norm.cccdgiamho || norm.cccdme || norm.cccdcha || norm.guardianid || norm.cccdidguardian || norm.cccdnguoigiamho || data.cccd_giam_ho;
+    if (cccdGiamHo) {
+      let cleanCccdGiamHo = String(cccdGiamHo).replace(/[^0-9]/g, '');
+      if (cleanCccdGiamHo.length === 11) cleanCccdGiamHo = cleanCccdGiamHo.padStart(12, '0');
+      const cccdGHEl = document.querySelector('.TreEm_CCCD_NguoiGiamHo, [class*="TreEm_CCCD_NguoiGiamHo"]');
+      if (cccdGHEl && setTextBoxValue(cccdGHEl, cleanCccdGiamHo)) count++;
+    }
+
+    const moiQuanHe = norm.moiquanhe || norm.relationship || 'Mẹ';
+    const mqhEl = document.querySelector('.TreEm_MQH_NguoiGiamHo, [class*="TreEm_MQH_NguoiGiamHo"]');
+    if (mqhEl) {
+      await simulateDropdownSelect(mqhEl, moiQuanHe);
+      count++;
+    }
+
+    const sdtGiamHo = norm.sdtgiamho || norm.sdt || norm.phone || norm.phonenumber || data.sdt_giam_ho;
+    if (sdtGiamHo) {
+      const cleanSdtGH = String(sdtGiamHo).replace(/[^0-9+]/g, '');
+      const sdtGHEl = document.querySelector('.TreEm_SDT_NguoiGiamHo, [class*="TreEm_SDT_NguoiGiamHo"]');
+      if (sdtGHEl && setTextBoxValue(sdtGHEl, cleanSdtGH)) count++;
+    }
+
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Trẻ từ đủ 6 tuổi');
+    }
+
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    fillHanhChinhChiTraAndHinhThucDefaults();
+    refreshFormValidation();
+
+    return count;
+  }
+
+  function showHocSinhGiamHoModal() {
+    let modal = document.getElementById('hocSinhGiamHoModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'hocSinhGiamHoModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh giấy khám sức khỏe học sinh này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+1. "ho_ten": Viết in hoa đầy đủ họ và tên học sinh có dấu.
+2. "gioi_tinh": "Nam" hoặc "Nữ".
+3. "ngay_sinh": Định dạng dd/mm/yyyy.
+4. "cccd": Số CCCD/Mã định danh của học sinh (12 chữ số).
+5. "bhyt": Số thẻ BHYT.
+6. "dia_chi": Nơi ở hiện tại.
+7. "xa_phuong": Tên Phường/Xã.
+8. "ten_truong": Tên trường học.
+9. "lop": Lớp học.
+10. "nguoi_giam_ho": Họ và tên mẹ/người giám hộ.
+11. "cccd_giam_ho": Số CCCD của người giám hộ.
+12. "moi_quan_he": Mối quan hệ với trẻ (Vd: "Mẹ", "Cha").
+13. "sdt": Số điện thoại.
+
+Chỉ trả về JSON thuần túy:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "cccd": "...",
+  "bhyt": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "ten_truong": "...",
+  "lop": "...",
+  "nguoi_giam_ho": "...",
+  "cccd_giam_ho": "...",
+  "moi_quan_he": "...",
+  "sdt": "..."
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #2563eb, #1d4ed8); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🎓 Nhập Hành Chính Học Sinh Có Người Giám Hộ (JSON AI OCR)</h3>
+            <button id="btnModalCloseXHSGH" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptHSGH" style="background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaHSGH" placeholder='Vd:
+{
+  "ho_ten": "ĐINH GIA BẢO",
+  "gioi_tinh": "Nam",
+  "ngay_sinh": "06/10/2017",
+  "cccd": "067217003235",
+  "bhyt": "6721315435",
+  "dia_chi": "17/B1, khu phố 3, P. An Phú",
+  "xa_phuong": "An Phú",
+  "ten_truong": "Trường TH An Phú 2",
+  "lop": "2.2",
+  "nguoi_giam_ho": "Đinh Thị Nhiệm",
+  "cccd_giam_ho": "037186011691",
+  "moi_quan_he": "Mẹ",
+  "sdt": "0896129649"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusHSGH" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearHSGH" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportHSGH" style="background: #2563eb; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('btnModalCloseXHSGH').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearHSGH').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaHSGH').value = '';
+        document.getElementById('modalStatusHSGH').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptHSGH').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR Học Sinh!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportHSGH').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaHSGH').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusHSGH');
+        statusEl.style.color = '#2563eb';
+        statusEl.textContent = '⏳ Đang điền các thông tin học sinh & người giám hộ...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillHocSinhGiamHo(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính học sinh!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  async function parseAndFillNguoiLon(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    const norm = normalizeObjectKeys(data);
+    let count = 0;
+
+    const cccd = norm.cccd || norm.cmnd || norm.socccd || norm.idcard || norm.dinhdanh || norm.cccdidnumber || data.cccd;
+    if (cccd) {
+      let cleanCccd = String(cccd).replace(/[^0-9]/g, '');
+      if (cleanCccd.length === 11) cleanCccd = cleanCccd.padStart(12, '0');
+      const el = document.querySelector('.DinhDanhCaNhan, [class*="DinhDanhCaNhan"]');
+      if (el && setTextBoxValue(el, cleanCccd)) count++;
+    }
+
+    const hoTen = norm.hoten || norm.name || norm.fullname || norm.hovaten || data.ho_ten;
+    if (hoTen) {
+      const upperName = String(hoTen).trim().toUpperCase();
+      const el = document.querySelector('.HoTen, [class*="HoTen"]');
+      if (el && setTextBoxValue(el, upperName)) count++;
+    }
+
+    const gioiTinh = norm.gioitinh || norm.gender || norm.sex || data.gioi_tinh;
+    if (gioiTinh) {
+      const gStr = String(gioiTinh).trim().toLowerCase().includes('nam') ? 'Nam' : 'Nữ';
+      const el = document.querySelector('.GioiTinh, [class*="GioiTinh"]') || 'Giới tính';
+      if (simulateTick(el, gStr)) count++;
+    }
+
+    const ngaySinh = norm.ngaysinh || norm.dateofbirth || norm.dob || norm.birthdate || norm.birth_date || norm.ngaythangnamsinh || norm.ngay || data.ngay_sinh;
+    if (ngaySinh) {
+      const el = document.querySelector('.NgaySinh, [class*="NgaySinh"]');
+      if (el && setDateBoxValue(el, String(ngaySinh))) count++;
+    }
+
+    const bhyt = norm.bhyt || norm.sothebhyt || norm.sobhyt || norm.thebhyt || data.bhyt;
+    if (bhyt) {
+      const cleanBhyt = String(bhyt).replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
+      const el = document.querySelector('.BHYT, [class*="BHYT"]');
+      if (el && setTextBoxValue(el, cleanBhyt)) count++;
+    }
+
+    const sdt = norm.sdt || norm.sodienthoai || norm.phone || norm.phonenumber || norm.dienthoaididong || data.sdt;
+    if (sdt) {
+      const cleanSdt = String(sdt).replace(/[^0-9+]/g, '');
+      const el = document.querySelector('.SDT, [class*="SDT"]');
+      if (el && setTextBoxValue(el, cleanSdt)) count++;
+    }
+
+    const diaChi = norm.diachi || norm.noiohientai || norm.address || norm.currentplaceofliving || data.dia_chi;
+    if (diaChi) {
+      const el = document.querySelector('.DiaChiHienTai, [class*="DiaChiHienTai"]');
+      if (el && setTextBoxValue(el, String(diaChi).trim())) count++;
+    }
+
+    let xaPhuong = norm.xaphuong || norm.ward || data.xa_phuong;
+    if (!xaPhuong && diaChi) {
+      const lower = diaChi.toLowerCase();
+      if (lower.includes('lái thiêu')) xaPhuong = 'Lái Thiêu';
+      else if (lower.includes('thuận giao')) xaPhuong = 'Thuận Giao';
+      else if (lower.includes('an phú')) xaPhuong = 'An Phú';
+      else if (lower.includes('bình chuẩn')) xaPhuong = 'Bình Chuẩn';
+      else if (lower.includes('an thạnh')) xaPhuong = 'An Thạnh';
+      else if (lower.includes('vĩnh phú')) xaPhuong = 'Vĩnh Phú';
+      else if (lower.includes('bình hòa')) xaPhuong = 'Bình Hòa';
+      else if (lower.includes('bình nhâm')) xaPhuong = 'Bình Nhâm';
+      else if (lower.includes('hưng định')) xaPhuong = 'Hưng Định';
+      else if (lower.includes('an sơn')) xaPhuong = 'An Sơn';
+    }
+    if (xaPhuong) {
+      const xaEl = document.querySelector('.DiaChiHienTai_XaPhuong, [class*="DiaChiHienTai_XaPhuong"]') || 'Xã/Phường';
+      await simulateDropdownSelect(xaEl, xaPhuong);
+      count++;
+    }
+
+    const danToc = norm.dantoc || norm.ethnicity || 'Kinh';
+    const danTocEl = document.querySelector('.DanTocId, [class*="DanTocId"]') || 'Dân tộc';
+    await simulateDropdownSelect(danTocEl, danToc);
+    count++;
+
+    const ngheNghiep = norm.nghenghiep || norm.occupation || norm.job || data.nghe_nghiep;
+    if (ngheNghiep) {
+      const nnEl = document.querySelector('.NgheNghiepId, [class*="NgheNghiep"], [class*="Nghe_Nghiep"]');
+      if (nnEl) {
+        if (nnEl.classList.contains('dx-selectbox') || nnEl.querySelector('.dx-selectbox')) {
+          await simulateDropdownSelect(nnEl, String(ngheNghiep).trim());
+        } else {
+          setTextBoxValue(nnEl, String(ngheNghiep).trim());
+        }
+        count++;
+      }
+    }
+
+    const noiLamViec = norm.noilamviec || norm.noilamviechoctap || norm.noicongtac || norm.workplace || norm.workplaceplace || data.noi_lam_viec;
+    if (noiLamViec) {
+      const nlvEl = document.querySelector('.NoiCongTac, [class*="NoiCongTac"], .NoiLamViec, [class*="NoiLamViec"]');
+      if (nlvEl) {
+        if (nlvEl.classList.contains('dx-selectbox') || nlvEl.querySelector('.dx-selectbox')) {
+          await simulateDropdownSelect(nlvEl, String(noiLamViec).trim());
+        } else {
+          setTextBoxValue(nlvEl, String(noiLamViec).trim());
+        }
+        count++;
+      }
+    }
+
+    const lyDo = norm.lydokham || norm.lydokhamkhoe || norm.reason || 'Khám sức khỏe định kỳ';
+    const lyDoEl = document.querySelector('.LyDoKham, [class*="LyDoKham"], .LyDoKhamSK, [class*="LyDoKhamSK"]');
+    if (lyDoEl) {
+      const txtArea = lyDoEl.querySelector('textarea.dx-texteditor-input') || (lyDoEl.tagName === 'TEXTAREA' ? lyDoEl : null);
+      if (txtArea) {
+        txtArea.focus();
+        txtArea.value = lyDo;
+        txtArea.dispatchEvent(new Event('input', { bubbles: true }));
+        txtArea.dispatchEvent(new Event('change', { bubbles: true }));
+        txtArea.dispatchEvent(new Event('blur', { bubbles: true }));
+        count++;
+      } else if (setTextBoxValue(lyDoEl, lyDo)) {
+        count++;
+      }
+    }
+
+    const dtEl = document.querySelector('.DoiTuong_M13, [class*="DoiTuong_M13"]');
+    if (dtEl) {
+      setTagBoxValue(dtEl, 'Người từ đủ 18 tuổi');
+    }
+
+    const diaDiemKham = data.dia_diem_kham || 'Khám Lưu Động';
+    const ddEl = document.querySelector('.DoiTuongKham, [class*="DoiTuongKham"]') || 'Địa điểm khám';
+    await simulateDropdownSelect(ddEl, diaDiemKham);
+
+    fillHanhChinhChiTraAndHinhThucDefaults();
+    refreshFormValidation();
+
+    return count;
+  }
+
+  function showNguoiLonModal() {
+    let modal = document.getElementById('nguoiLonModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'nguoiLonModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh "GIẤY KHÁM SỨC KHỎE DÙNG CHO NGƯỜI TỪ ĐỦ 18 TUỔI TRỞ LÊN" này và trích xuất thông tin hành chính thành định dạng JSON đơn giản dưới đây.
+LƯU Ý CỰC KỲ QUAN TRỌNG:
+1. "ho_ten": Viết in hoa đầy đủ họ và tên có dấu.
+2. "gioi_tinh": "Nam" hoặc "Nữ".
+3. "ngay_sinh": Định dạng dd/mm/yyyy.
+4. "dan_toc": Ghi rõ dân tộc (mặc định "Kinh").
+5. "cccd": Số CCCD (12 chữ số).
+6. "bhyt": Số thẻ BHYT.
+7. "dia_chi": Nơi ở hiện tại.
+8. "xa_phuong": Tên Phường/Xã.
+9. "nghe_nghiep": Nghề nghiệp.
+10. "noi_lam_viec": Nơi làm việc.
+11. "sdt": Số điện thoại.
+12. "ly_do_kham": Lý do khám sức khỏe.
+
+Chỉ trả về JSON thuần túy:
+{
+  "ho_ten": "...",
+  "gioi_tinh": "Nam/Nữ",
+  "ngay_sinh": "dd/mm/yyyy",
+  "dan_toc": "Kinh",
+  "cccd": "...",
+  "bhyt": "...",
+  "dia_chi": "...",
+  "xa_phuong": "...",
+  "nghe_nghiep": "...",
+  "noi_lam_viec": "...",
+  "sdt": "...",
+  "ly_do_kham": "Khám sức khỏe định kỳ"
+}`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #0284c7, #0369a1); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧑 Nhập Hành Chính Người Lớn (>=18 Tuổi JSON AI OCR)</h3>
+            <button id="btnModalCloseXNL" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON thông tin trích xuất từ AI OCR vào bên dưới:</span>
+              <button id="btnCopyPromptNL" style="background: #f0f9ff; color: #0284c7; border: 1px solid #bae6fd; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputAreaNL" placeholder='Vd:
+{
+  "ho_ten": "NGUYỄN THỊ HUYỀN",
+  "gioi_tinh": "Nữ",
+  "ngay_sinh": "20/01/1982",
+  "dan_toc": "Kinh",
+  "cccd": "037182004541",
+  "bhyt": "",
+  "dia_chi": "A4089, Bình Đức, Lái Thiêu",
+  "xa_phuong": "Lái Thiêu",
+  "nghe_nghiep": "Lao động tự do",
+  "noi_lam_viec": "",
+  "sdt": "0909592004",
+  "ly_do_kham": "Khám sức khỏe định kỳ"
+}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatusNL" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClearNL" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImportNL" style="background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('btnModalCloseXNL').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClearNL').addEventListener('click', () => {
+        document.getElementById('jsonInputAreaNL').value = '';
+        document.getElementById('modalStatusNL').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPromptNL').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR Người Lớn!\nBạn có thể dán Prompt này kèm ảnh giấy khám sức khỏe vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImportNL').addEventListener('click', async () => {
+        const text = document.getElementById('jsonInputAreaNL').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const statusEl = document.getElementById('modalStatusNL');
+        statusEl.style.color = '#0284c7';
+        statusEl.textContent = '⏳ Đang điền các thông tin người lớn...';
+        statusEl.style.display = 'block';
+
+        const filled = await parseAndFillNguoiLon(text);
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công các thông tin hành chính người lớn!`;
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy các trường tương ứng trên trang hiện tại!';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  /* ==========================================================================
+     SECTION B: KSK NHI KHOA FORM AUTOMATION
+     ========================================================================== */
+  function processCheckbox(containerEl) {
+    if (!containerEl) return false;
+    const chkEl = containerEl.classList.contains('dx-checkbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-checkbox') || containerEl);
+
+    const inst = getDxWidgetInstance(chkEl, 'dxCheckBox');
+
+    if (inst) {
+      try {
+        if (inst.option('value') !== true) {
+          inst.option('value', true);
+        }
+      } catch (e) {
+        console.warn('[Fill all] Checkbox option set error:', e);
+      }
+    }
+
+    const icon = chkEl.querySelector('.dx-checkbox-icon') || chkEl;
+    const isChecked = chkEl.classList.contains('dx-checkbox-checked') || (inst && inst.option('value') === true);
+    if (!isChecked && icon) {
+      icon.click();
+    }
+    return true;
+  }
+
+  function processList(containerEl) {
+    if (!containerEl) return false;
+    const listEl = containerEl.classList.contains('dx-list')
+      ? containerEl
+      : (containerEl.querySelector('.dx-list') || containerEl);
+
+    const inst = getDxWidgetInstance(listEl, 'dxList');
+    const items = listEl.querySelectorAll('.dx-list-item');
+    if (!items.length) return false;
+
+    let processed = false;
+    items.forEach((item, index) => {
+      const text = item.textContent.replace(/\s+/g, ' ').trim();
+      if (text === 'Loại I' || /^loại\s*i$/i.test(text)) {
+        if (inst) {
+          try {
+            inst.selectItem(index);
+            processed = true;
+          } catch (e) {
+            console.warn('[Fill all] List selectItem error:', e);
+          }
+        }
+
+        const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+        if (!isSelected) {
+          const target = item.querySelector('.dx-radiobutton, .dx-checkbox, .dx-list-item-content') || item;
+          target.click();
+        }
+        processed = true;
+      }
+    });
+
+    return processed;
+  }
+
+  function findElements(selector) {
+    const els = document.querySelectorAll(selector);
+    return els ? Array.from(els) : [];
+  }
+
+  function fillAll() {
+    let filledCount = 0;
+
+    const chkContainers = document.querySelectorAll('[class*="_ChuaPhatHienBatThuong"]');
+    chkContainers.forEach(function (el) {
+      if (el.className.includes('NoiKhoa_ChuaPhatHienBatThuong')) return;
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    const listContainers = document.querySelectorAll('[class*="_PhanLoai"]');
+    listContainers.forEach(function (el) {
+      if (el.className.includes('NoiKhoa_PhanLoai')) return;
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('fillAllBtn');
+    if (btn) {
+      const origText = 'Fill all';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Filled ${filledCount} items`;
+        btn.style.background = '#059669';
+      } else {
+        btn.textContent = '⚠ No fields found';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#059669';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION C: TAI - MŨI - HỌNG
+     ========================================================================== */
+
+  function setNumberBoxValue(containerEl, valueNum, valueStr) {
+    if (!containerEl) return false;
+    const numBoxEl = containerEl.classList.contains('dx-numberbox')
+      ? containerEl
+      : (containerEl.querySelector('.dx-numberbox') || containerEl);
+
+    const formattedStr = String(valueStr || valueNum).replace('.', ',');
+    const parsedNum = typeof valueNum === 'number' ? valueNum : parseFloat(String(valueNum).replace(',', '.'));
+
+    const input = numBoxEl.querySelector('input.dx-texteditor-input');
+    if (input) {
+      input.focus();
+      const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+      if (nativeSetter) {
+        nativeSetter.call(input, formattedStr);
+      } else {
+        input.value = formattedStr;
+      }
+      input.dispatchEvent(new Event('focus', { bubbles: true }));
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: formattedStr }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+
+    const inst = getDxWidgetInstance(numBoxEl, 'dxNumberBox');
+    if (inst) {
+      try {
+        inst.option('value', parsedNum);
+        inst.option('isValid', true);
+        if (typeof inst.validate === 'function') inst.validate();
+      } catch (e) {
+        console.warn('NumberBox option set error:', e);
+      }
+    }
+
+    numBoxEl.classList.remove('dx-invalid', 'dx-texteditor-empty');
+    return true;
+  }
+
+  function fillTaiHearing() {
+    let filledCount = 0;
+
+    const topLeft = document.querySelector('.TMH_TaiTrai_NoiThuong, [class*="TaiTrai_NoiThuong" i]');
+    if (topLeft && setNumberBoxValue(topLeft, 5, '5')) filledCount++;
+
+    const bottomLeft = document.querySelector('.TMH_TaiPhai_NoiThuong, [class*="TaiPhai_NoiThuong" i]');
+    if (bottomLeft && setNumberBoxValue(bottomLeft, 5, '5')) filledCount++;
+
+    const topRight = document.querySelector('.TMH_TaiTrai_NoiTham, [class*="TaiTrai_NoiTham" i]');
+    if (topRight && setNumberBoxValue(topRight, 0.5, '0,5')) filledCount++;
+
+    const bottomRight = document.querySelector('.TMH_TaiPhai_NoiTham, [class*="TaiPhai_NoiTham" i]');
+    if (bottomRight && setNumberBoxValue(bottomRight, 0.5, '0,5')) filledCount++;
+
+    const chkContainers = findElements('.TMH_ChuaPhatHienBatThuong');
+    chkContainers.forEach(function (el) {
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    const listContainers = findElements('.TMH_PhanLoai');
+    listContainers.forEach(function (el) {
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('btnTai');
+    if (btn) {
+      const origText = 'Tai';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Tai (${filledCount})`;
+        btn.style.background = '#0284c7';
+      } else {
+        btn.textContent = '⚠ Tai (0)';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#0284c7';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION D: RĂNG - HÀM - MẶT
+     ========================================================================== */
+
+  function fillRang() {
+    let filledCount = 0;
+
+    const chkContainers = findElements('.RHM_ChuaPhatHienBatThuong');
+    chkContainers.forEach(function (el) {
+      if (processCheckbox(el)) filledCount++;
+    });
+
+    const listContainers = findElements('.RHM_PhanLoai');
+    listContainers.forEach(function (el) {
+      if (processList(el)) filledCount++;
+    });
+
+    const btn = document.getElementById('btnRang');
+    if (btn) {
+      const origText = 'Răng';
+      if (filledCount > 0) {
+        btn.textContent = `✓ Răng (${filledCount})`;
+        btn.style.background = '#0d9488';
+      } else {
+        btn.textContent = '⚠ Răng (0)';
+        btn.style.background = '#dc2626';
+      }
+
+      setTimeout(() => {
+        btn.textContent = origText;
+        btn.style.background = '#0d9488';
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION E: TIÊM CHỦNG
+     ========================================================================== */
+
+  function fillVaccines(regexPattern) {
+    const radioGroups = document.querySelectorAll('.dx-radiogroup, .editorRadio');
+    let filledCount = 0;
+
+    radioGroups.forEach(groupEl => {
+      const inst = getDxWidgetInstance(groupEl, 'dxRadioGroup');
+      const radioBtns = groupEl.querySelectorAll('.dx-radiobutton');
+
+      radioBtns.forEach((btn, index) => {
+        const text = btn.textContent.replace(/\s+/g, ' ').trim();
+        if (regexPattern.test(text)) {
+          if (inst) {
+            try {
+              const items = inst.option('items');
+              if (items && items[index]) {
+                inst.option('value', items[index]);
+              } else {
+                inst.option('value', text);
+              }
+            } catch (e) {}
+          }
+
+          const isChecked = btn.classList.contains('dx-radiobutton-checked') || btn.getAttribute('aria-checked') === 'true';
+          if (!isChecked) {
+            const clickTarget = btn.querySelector('.dx-radiobutton-icon, .dx-radio-value-container, .dx-item-content') || btn;
+            clickTarget.click();
+          }
+          filledCount++;
+        }
+      });
+    });
+
+    return filledCount;
+  }
+
+  function handleVaccineClick(btnId, labelText, regexPattern) {
+    const count = fillVaccines(regexPattern);
+    const btn = document.getElementById(btnId);
+    if (btn) {
+      const origText = labelText;
+      if (count > 0) {
+        btn.textContent = `✓ ${labelText} (${count})`;
+      } else {
+        btn.textContent = `⚠ ${labelText} (0)`;
+      }
+      setTimeout(() => {
+        btn.textContent = origText;
+      }, 2500);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION F: NGƯỜI CAO TUỔI (M4) MASS SELECT
+     ========================================================================== */
+
+  function massSelectKhongTienSu() {
+    const section2 = document.querySelector('.Benh_TienSuBanThan_Json') || document;
+    const rows = section2.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const listItems = row.querySelectorAll('.dx-list-item');
+      listItems.forEach(item => {
+        const text = (item.textContent || item.innerText || '').trim();
+        if (text === 'Không') {
+          const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+          triggerClick(radio);
+          triggerClick(item);
+
+          const dxListEl = item.closest('.dx-list');
+          if (dxListEl) {
+            const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+            if (listWidget && typeof listWidget.selectItem === 'function') {
+              try { listWidget.selectItem(item); } catch (e) {}
+            }
+          }
+          count++;
+        }
+      });
+    });
+
+    const btn = document.getElementById('btnKhongTienSu');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Không (tiền sử)';
+      }, 1800);
+    }
+  }
+
+  function massSelectHauNhuKhong() {
+    const rows = document.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const firstCol = row.querySelector('td:first-child');
+      const firstColText = firstCol ? (firstCol.textContent || firstCol.innerText || '').trim() : '';
+
+      if (firstColText.startsWith('D6.') || firstColText.startsWith('D7.')) {
+        const listItems = row.querySelectorAll('.dx-list-item');
+        listItems.forEach(item => {
+          const text = (item.textContent || item.innerText || '').trim();
+          if (text === 'Hầu như không') {
+            const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+            triggerClick(radio);
+            triggerClick(item);
+
+            const dxListEl = item.closest('.dx-list');
+            if (dxListEl) {
+              const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+              if (listWidget && typeof listWidget.selectItem === 'function') {
+                try { listWidget.selectItem(item); } catch (e) {}
+              }
+            }
+            count++;
+          }
+        });
+      }
+    });
+
+    const btn = document.getElementById('btnHauNhuKhong');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Hầu Như Không';
+      }, 1800);
+    }
+  }
+
+  function massSelectCoD8() {
+    const rows = document.querySelectorAll('.dx-data-row');
+    let count = 0;
+
+    rows.forEach(row => {
+      const firstCol = row.querySelector('td:first-child');
+      let firstColText = firstCol ? (firstCol.textContent || firstCol.innerText || '').trim() : '';
+
+      firstColText = firstColText.replace(/\.$/, '');
+
+      if (firstColText === 'D8' || firstColText.startsWith('D8.1') || firstColText.startsWith('D8.2')) {
+        const listItems = row.querySelectorAll('.dx-list-item');
+        listItems.forEach(item => {
+          const text = (item.textContent || item.innerText || '').trim();
+          if (text === 'Có') {
+            const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+            triggerClick(radio);
+            triggerClick(item);
+
+            const dxListEl = item.closest('.dx-list');
+            if (dxListEl) {
+              const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+              if (listWidget && typeof listWidget.selectItem === 'function') {
+                try { listWidget.selectItem(item); } catch (e) {}
+              }
+            }
+            count++;
+          }
+        });
+      }
+    });
+
+    const btn = document.getElementById('btnCoD8');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Có D8';
+      }, 1800);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION G: RĂNG HÀM MẶT AUTOMATION (NATIVE DENTAL CHART & MULTI-SELECT)
+     ========================================================================== */
+
+  const TEETH_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
+  const TEETH_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
+  const ALL_TEETH = [...TEETH_UPPER, ...TEETH_LOWER];
+
+  const RHM_STATUS_CODES = {
+    'binhthuong': '191',
+    'bình thường': '191',
+    'normal': '191',
+    '191': '191',
+
+    'sau': '192',
+    'sâu': '192',
+    'caries': '192',
+    '192': '192',
+
+    'tramsavlai': '193',
+    'trám sâu lại': '193',
+    '193': '193',
+
+    'tramtot': '194',
+    'trám tốt': '194',
+    'tram': '194',
+    'trám': '194',
+    '194': '194',
+
+    'matdosau': '195',
+    'mất do sâu': '195',
+    'mat': '195',
+    'mất': '195',
+    '195': '195',
+
+    'matlydokhac': '196',
+    'mất lý do khác': '196',
+    'khac': '196',
+    'khác': '196',
+    '196': '196',
+
+    'bithoranh': '197',
+    'bít hố rãnh': '197',
+    '197': '197',
+
+    'tru, cau,implant': '198',
+    'trụ, cầu,implant': '198',
+    'implant': '198',
+    '198': '198',
+
+    'chuamoc': '220',
+    'chưa mọc': '220',
+    '220': '220',
+
+    'khongghinhan': '221',
+    'không ghi nhận': '221',
+    '221': '221'
+  };
+
+  const RHM_STATUS_NAMES = {
+    '191': 'Bình thường',
+    '192': 'Sâu',
+    '193': 'Trám sâu lại',
+    '194': 'Trám tốt',
+    '195': 'Mất do sâu',
+    '196': 'Mất lý do khác',
+    '197': 'Bít hố rãnh',
+    '198': 'Trụ, cầu, implant',
+    '220': 'Chưa mọc',
+    '221': 'Không ghi nhận'
+  };
+
+  function setDxSelectBoxByText(widgetInstance, textToFind) {
+    if (!widgetInstance) return false;
+    try {
+      let items = [];
+      const ds = widgetInstance.option('dataSource');
+      const itemsOption = widgetInstance.option('items');
+
+      if (Array.isArray(itemsOption) && itemsOption.length > 0) {
+        items = itemsOption;
+      } else if (Array.isArray(ds)) {
+        items = ds;
+      } else if (ds && ds.store) {
+        const store = typeof ds.store === 'function' ? ds.store() : ds.store;
+        if (store && store._array) {
+          items = store._array;
+        }
+      }
+
+      const displayExpr = widgetInstance.option('displayExpr');
+      const valueExpr = widgetInstance.option('valueExpr');
+
+      for (let item of items) {
+        const itemText = (typeof item === 'object' && displayExpr) ? item[displayExpr] : item;
+        if (itemText && String(itemText).toLowerCase().includes(textToFind.toLowerCase())) {
+          const valToSet = (typeof item === 'object' && valueExpr) ? item[valueExpr] : item;
+          if (widgetInstance.NAME === 'dxTagBox') {
+            let currentVal = widgetInstance.option('value') || [];
+            if (!Array.isArray(currentVal)) currentVal = [currentVal];
+            if (!currentVal.includes(valToSet)) {
+               widgetInstance.option('value', [...currentVal, valToSet]);
+            }
+          } else {
+            widgetInstance.option('value', valToSet);
+          }
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('[RHM] Error setting dx select box', e);
+    }
+    return false;
+  }
+
+  function findToothElement(toothNumber, rootDoc = document) {
+    const tStr = String(toothNumber).trim();
+
+    const nativeSelect = rootDoc.querySelector(`select.tooth-select[data-tooth="${tStr}"], select[data-tooth="${tStr}"], #tooth-card-${tStr} select`);
+    if (nativeSelect) return { type: 'native_select', element: nativeSelect };
+
+    const toothCard = rootDoc.getElementById(`tooth-card-${tStr}`) || rootDoc.querySelector(`.tooth-card[data-tooth="${tStr}"]`);
+    if (toothCard) {
+      const sel = toothCard.querySelector('select');
+      if (sel) return { type: 'native_select', element: sel };
+    }
+
+    const fieldItems = rootDoc.querySelectorAll('.dx-field-item');
+    for (let field of fieldItems) {
+      const label = field.querySelector('.dx-field-item-label-text');
+      if (label) {
+        const labelText = label.textContent.trim().toLowerCase();
+        if (labelText === tStr || labelText === `răng ${tStr}` || labelText === `răng số ${tStr}` || labelText.includes(` ${tStr}`)) {
+          const widgetEl = field.querySelector('.dx-selectbox, .dx-tagbox');
+          if (widgetEl) {
+            const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
+            if (inst) return { type: 'dx_widget', instance: inst };
+          }
+        }
+      }
+    }
+
+    const iframes = rootDoc.querySelectorAll('iframe');
+    for (let ifr of iframes) {
+      try {
+        const ifrDoc = ifr.contentDocument || (ifr.contentWindow && ifr.contentWindow.document);
+        if (ifrDoc) {
+          const found = findToothElement(toothNumber, ifrDoc);
+          if (found) return found;
+        }
+      } catch (e) {}
+    }
+
+    return null;
+  }
+
+  function setToothStatus(toothNumber, statusKeyOrId) {
+    const target = findToothElement(toothNumber);
+    if (!target) return false;
+
+    const normKey = String(statusKeyOrId).trim().toLowerCase();
+    const statusId = RHM_STATUS_CODES[normKey] || statusKeyOrId;
+
+    if (target.type === 'native_select') {
+      const select = target.element;
+      let matchedValue = null;
+
+      for (let opt of select.options) {
+        if (opt.value === String(statusId)) {
+          matchedValue = opt.value;
+          break;
+        }
+        if (opt.textContent.toLowerCase().includes(normKey)) {
+          matchedValue = opt.value;
+          break;
+        }
+      }
+
+      if (!matchedValue) matchedValue = String(statusId);
+
+      select.value = matchedValue;
+
+      select.dispatchEvent(new Event('input', { bubbles: true }));
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+
+      const $ = getJQuery();
+      if ($) {
+        try {
+          $(select).val(matchedValue).trigger('change');
+        } catch (e) {}
+      }
+
+      const card = select.closest('.tooth-card') || document.getElementById(`tooth-card-${toothNumber}`);
+      if (card) {
+        card.setAttribute('data-status-id', matchedValue);
+      }
+
+      return true;
+    }
+
+    if (target.type === 'dx_widget') {
+      return setDxSelectBoxByText(target.instance, statusKeyOrId);
+    }
+
+    return false;
+  }
+
+  function processTeethInput(statusKeyOrId, explicitTeethList = null) {
+    const inputEl = document.getElementById('inputTeethRHM');
+    const statusEl = document.getElementById('rhmStatusLabel');
+
+    let teeth = [];
+    if (Array.isArray(explicitTeethList) && explicitTeethList.length > 0) {
+      teeth = explicitTeethList;
+    } else if (inputEl) {
+      const rawVal = inputEl.value;
+      if (!rawVal.trim()) {
+        if (statusEl) {
+          statusEl.textContent = '⚠ Vui lòng chọn hoặc nhập số răng';
+          statusEl.style.color = '#dc2626';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+        }
+        return 0;
+      }
+      teeth = rawVal.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    }
+
+    if (!teeth.length) {
+      if (statusEl) {
+        statusEl.textContent = '⚠ Vui lòng chọn hoặc nhập số răng';
+        statusEl.style.color = '#dc2626';
+        setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2500);
+      }
+      return 0;
+    }
+
+    let successCount = 0;
+    let failList = [];
+
+    teeth.forEach(t => {
+      const success = setToothStatus(t, statusKeyOrId);
+      if (success) successCount++;
+      else failList.push(t);
+    });
+
+    const statusName = RHM_STATUS_NAMES[statusKeyOrId] || statusKeyOrId;
+
+    if (statusEl) {
+      if (failList.length > 0 && successCount === 0) {
+        statusEl.textContent = `⚠ Không tìm thấy răng: ${failList.join(', ')}`;
+        statusEl.style.color = '#dc2626';
+      } else if (failList.length > 0) {
+        statusEl.textContent = `✓ Đã gắn ${successCount} răng, lỗi: ${failList.join(', ')}`;
+        statusEl.style.color = '#d97706';
+      } else {
+        statusEl.textContent = `✓ Đã gắn ${successCount} răng [${statusName}]`;
+        statusEl.style.color = '#16a34a';
+      }
+
+      setTimeout(() => {
+        if (statusEl) statusEl.textContent = '';
+      }, 3000);
+    }
+
+    return successCount;
+  }
+
+  /* ==========================================================================
+     SECTION H: XẾT NGHIỆM MÁU / CẬN LÂM SÀNG JSON IMPORTER
+     ========================================================================== */
+
+  const BLOOD_TEST_MAP = {
+    'hc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+    'rbc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+    'soluonghc': ['.CongThucMau_SLHC', '[class*="CongThucMau_SLHC"]'],
+
+    'huyetsacto': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+    'hgb': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+    'hb': ['.XNM_HuyetSacTo', '[class*="XNM_HuyetSacTo"]'],
+
+    'hematocrit': ['.XNM_Hematocrit', '[class*="XNM_Hematocrit"]'],
+    'hct': ['.XNM_Hematocrit', '[class*="XNM_Hematocrit"]'],
+
+    'mcv': ['.XNM_MCV', '[class*="XNM_MCV"]'],
+    'mch': ['.XNM_MCH', '[class*="XNM_MCH"]'],
+    'mchc': ['.XNM_MCHC', '[class*="XNM_MCHC"]'],
+    'rdw': ['.XNM_RDW', '[class*="XNM_RDW"]'],
+
+    'bachcau': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+    'wbc': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+    'soluongbachcau': ['.CongThucMau_SLBC', '[class*="CongThucMau_SLBC"]'],
+
+    'trungtinh': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'neu': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'neutrophil': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'mid': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+    'mid#': ['.SLBC_TrungTinh', '[class*="SLBC_TrungTinh"]'],
+
+    'lympho': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+    'lym': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+    'lymph': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+    'lymph#': ['.SLBC_lympho', '[class*="SLBC_lympho"]'],
+
+    'tieucau': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+    'plt': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+    'soluongtieucau': ['.CongThucMau_SLTC', '[class*="CongThucMau_SLTC"]'],
+
+    'duongmau': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+    'glucose': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+    'glu': ['.SinhHoaMau_DuongMau', '[class*="SinhHoaMau_DuongMau"]'],
+
+    'ure': ['.SinhHoaMau_Ure', '[class*="SinhHoaMau_Ure"]'],
+    'urea': ['.SinhHoaMau_Ure', '[class*="SinhHoaMau_Ure"]'],
+
+    'creatinin': ['.SinhHoaMau_Creatinin', '[class*="SinhHoaMau_Creatinin"]'],
+    'creatinine': ['.SinhHoaMau_Creatinin', '[class*="SinhHoaMau_Creatinin"]'],
+
+    'asat': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+    'got': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+    'ast': ['.SinhHoaMau_ASAT_GOT', '[class*="SinhHoaMau_ASAT_GOT"]'],
+
+    'alat': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+    'gpt': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+    'alt': ['.SinhHoaMau_ALAT_GPT', '[class*="SinhHoaMau_ALAT_GPT"]'],
+
+    'titrong': ['.NuocTieu_TiTrong', '[class*="NuocTieu_TiTrong"]'],
+    'sg': ['.NuocTieu_TiTrong', '[class*="NuocTieu_TiTrong"]'],
+
+    'ph': ['.NuocTieu_pH', '[class*="NuocTieu_pH"]'],
+
+    'nuoc_tieu_bc': ['.NuocTieu_BC', '[class*="NuocTieu_BC"]'],
+    'leu': ['.NuocTieu_BC', '[class*="NuocTieu_BC"]'],
+
+    'nuoc_tieu_hc': ['.NuocTieu_HC', '[class*="NuocTieu_HC"]'],
+    'ery': ['.NuocTieu_HC', '[class*="NuocTieu_HC"]'],
+
+    'protein': ['.NuocTieu_Protein', '[class*="NuocTieu_Protein"]'],
+
+    'nuoc_tieu_duong': ['.NuocTieu_Duong', '[class*="NuocTieu_Duong"]'],
+    'ket': ['.NuocTieu_Cetonic', '[class*="NuocTieu_Cetonic"]'],
+    'bil': ['.NuocTieu_Bilirubin', '[class*="NuocTieu_Bilirubin"]'],
+    'uro': ['.NuocTieu_Urobilinogen', '[class*="NuocTieu_Urobilinogen"]']
+  };
+
+  function fillUrineDefaults() {
+    const textFields = [
+      '.NuocTieu_BC', '[class*="NuocTieu_BC"]',
+      '.NuocTieu_HC', '[class*="NuocTieu_HC"]',
+      '.NuocTieu_Protein', '[class*="NuocTieu_Protein"]',
+      '.NuocTieu_Duong', '[class*="NuocTieu_Duong"]',
+      '.NuocTieu_Cetonic', '[class*="NuocTieu_Cetonic"]',
+      '.NuocTieu_Bilirubin', '[class*="NuocTieu_Bilirubin"]',
+      '.NuocTieu_Urobilinogen', '[class*="NuocTieu_Urobilinogen"]'
+    ];
+
+    textFields.forEach(sel => {
+      const el = document.querySelector(sel);
+      if (el) setTextBoxValue(el, 'Negative');
+    });
+
+    const nitritEl = document.querySelector('.NuocTieu_NiTrit, [class*="NuocTieu_NiTrit"]');
+    if (nitritEl) {
+      const btns = nitritEl.querySelectorAll('.dx-radiobutton');
+      btns.forEach(btn => {
+        if (btn.textContent.includes('Âm Tính')) {
+          const icon = btn.querySelector('.dx-radiobutton-icon') || btn;
+          icon.click();
+        }
+      });
+    }
+  }
+
+  function parseAndFillBloodTestJSON(jsonInput) {
+    let data;
+    try {
+      let cleanJson = jsonInput.replace(/```json/gi, '').replace(/```/g, '').trim();
+      data = JSON.parse(cleanJson);
+    } catch (e) {
+      alert('❌ Lỗi cú pháp JSON! Vui lòng kiểm tra lại dữ liệu đã dán.\n' + e.message);
+      return false;
+    }
+
+    let count = 0;
+    for (let rawKey in data) {
+      if (!Object.prototype.hasOwnProperty.call(data, rawKey)) continue;
+
+      const val = data[rawKey];
+      if (val === null || val === undefined || val === '') continue;
+
+      const normKey = rawKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const selectors = BLOOD_TEST_MAP[normKey];
+
+      if (selectors) {
+        let el = null;
+        for (let sel of selectors) {
+          el = document.querySelector(sel);
+          if (el) break;
+        }
+
+        if (el) {
+          let valNum = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
+
+          if (!isNaN(valNum)) {
+            if (normKey === 'huyetsacto' || normKey === 'hgb' || normKey === 'hb') {
+              if (valNum < 40) {
+                valNum = Math.round(valNum * 10 * 10) / 10;
+              }
+            }
+
+            if (normKey === 'mchc') {
+              if (valNum < 50) {
+                valNum = Math.round(valNum * 10 * 10) / 10;
+              }
+            }
+
+            if (normKey === 'duongmau' || normKey === 'glucose' || normKey === 'glu') {
+              if (valNum > 25) {
+                valNum = Math.round((valNum / 18) * 100) / 100;
+              }
+            }
+
+            const valStr = String(valNum).replace('.', ',');
+
+            if (setNumberBoxValue(el, valNum, valStr)) {
+              count++;
+            } else if (setTextBoxValue(el, valStr)) {
+              count++;
+            }
+          } else if (setTextBoxValue(el, String(val))) {
+            count++;
+          }
+        }
+      }
+    }
+
+    fillUrineDefaults();
+    return count;
+  }
+
+  function showBloodTestModal() {
+    let modal = document.getElementById('bloodTestModal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'bloodTestModal';
+      modal.style.cssText = [
+        'position: fixed',
+        'top: 0',
+        'left: 0',
+        'width: 100vw',
+        'height: 100vh',
+        'background: rgba(15, 23, 42, 0.65)',
+        'backdrop-filter: blur(6px)',
+        'z-index: 9999999',
+        'display: flex',
+        'align-items: center',
+        'justify-content: center',
+        'font-family: system-ui, -apple-system, sans-serif'
+      ].join(';');
+
+      const samplePrompt = `Hãy đọc hình ảnh/báo cáo kết quả xét nghiệm này và trích xuất các chỉ số thành định dạng JSON đơn giản:
+{
+  "rbc": <Số lượng HC (RBC)>,
+  "hgb": <Huyết sắc tố (HGB)>,
+  "hct": <Hematocrit (HCT)>,
+  "mcv": <MCV>,
+  "mch": <MCH>,
+  "mchc": <MCHC>,
+  "rdw": <RDW>,
+  "wbc": <Số lượng bạch cầu (WBC)>,
+  "lym": <Bạch cầu Lympho (Lymph#)>,
+  "mid": <Bạch cầu Mid# (Mid#)>,
+  "plt": <Số lượng tiểu cầu (PLT)>,
+  "glucose": <Đường máu (Glucose)>,
+  "creatinin": <Creatinin>,
+  "ast": <ASAT/GOT>,
+  "alt": <ALAT/GPT>,
+  "ti_trong": <Tỉ trọng nước tiểu (nếu có)>,
+  "ph": <pH nước tiểu (nếu có)>
+}
+Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
+
+      modal.innerHTML = `
+        <div style="background: #ffffff; width: 560px; max-width: 92vw; border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column;">
+          <div style="background: linear-gradient(135deg, #0284c7, #0369a1); padding: 16px 20px; color: white; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 8px;">🧪 Nhập Dữ Liệu Xét Nghiệm Máu (JSON)</h3>
+            <button id="btnModalCloseX" style="background: transparent; border: none; color: white; font-size: 20px; cursor: pointer; line-height: 1;">&times;</button>
+          </div>
+          <div style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 600; color: #475569;">Dán JSON kết quả xét nghiệm vào bên dưới:</span>
+              <button id="btnCopyPrompt" style="background: #f1f5f9; color: #0284c7; border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer;">📋 Copy Prompt AI OCR</button>
+            </div>
+            <textarea id="jsonInputArea" placeholder='Vd: {"rbc": 4.5, "hgb": 135, "wbc": 6.8, "plt": 250, "glucose": 5.2, "creatinin": 75}' style="width: 100%; height: 160px; border-radius: 8px; border: 1px solid #cbd5e1; padding: 12px; font-family: monospace; font-size: 13px; outline: none; box-sizing: border-box; resize: vertical;"></textarea>
+            <div id="modalStatus" style="font-size: 13px; font-weight: 600; display: none;"></div>
+          </div>
+          <div style="background: #f8fafc; padding: 14px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; gap: 10px;">
+            <button id="btnModalClear" style="background: #e2e8f0; color: #334155; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 600; cursor: pointer;">Xóa</button>
+            <button id="btnModalImport" style="background: #0284c7; color: white; border: none; border-radius: 6px; padding: 8px 20px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">✓ Parse & Điền dữ liệu</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+
+      document.getElementById('btnModalCloseX').addEventListener('click', () => { modal.style.display = 'none'; });
+      document.getElementById('btnModalClear').addEventListener('click', () => {
+        document.getElementById('jsonInputArea').value = '';
+        document.getElementById('modalStatus').style.display = 'none';
+      });
+
+      document.getElementById('btnCopyPrompt').addEventListener('click', () => {
+        navigator.clipboard.writeText(samplePrompt).then(() => {
+          alert('✓ Đã copy Prompt mẫu cho AI OCR!\nBạn có thể dán Prompt này kèm ảnh kết quả xét nghiệm vào ChatGPT/Gemini/Claude.');
+        });
+      });
+
+      document.getElementById('btnModalImport').addEventListener('click', () => {
+        const text = document.getElementById('jsonInputArea').value;
+        if (!text.trim()) {
+          alert('Vui lòng dán dữ liệu JSON trước!');
+          return;
+        }
+
+        const filled = parseAndFillBloodTestJSON(text);
+        const statusEl = document.getElementById('modalStatus');
+        if (filled !== false) {
+          if (filled > 0) {
+            statusEl.style.color = '#059669';
+            statusEl.textContent = `✓ Đã điền thành công ${filled} chỉ số xét nghiệm!`;
+            statusEl.style.display = 'block';
+            setTimeout(() => { modal.style.display = 'none'; }, 1500);
+          } else {
+            statusEl.style.color = '#dc2626';
+            statusEl.textContent = '⚠ Không tìm thấy trường tương ứng trên trang hiện tại!';
+            statusEl.style.display = 'block';
+          }
+        }
+      });
+    }
+
+    modal.style.display = 'flex';
+  }
+
+  /* ==========================================================================
+     SECTION I: TÂM THẦN TRẺ EM MASS SELECT
+     ========================================================================== */
+
+  function massSelectTamThanKhongCo() {
+    const listItems = document.querySelectorAll('.dx-list-item');
+    let count = 0;
+    listItems.forEach(item => {
+      const text = (item.textContent || item.innerText || '').trim().toLowerCase();
+      if (text === 'không có') {
+        const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+        if (!isSelected) {
+          const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+          triggerClick(radio);
+          triggerClick(item);
+
+          const dxListEl = item.closest('.dx-list');
+          if (dxListEl) {
+            const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+            if (listWidget && typeof listWidget.selectItem === 'function') {
+              try { listWidget.selectItem(item); } catch (e) {}
+            }
+          }
+          count++;
+        }
+      }
+    });
+
+    const btn = document.getElementById('btnTamThanKhongCo');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Không có';
+      }, 1800);
+    }
+  }
+
+  function massSelectTamThanHTKDY() {
+    const listItems = document.querySelectorAll('.dx-list-item');
+    let count = 0;
+    listItems.forEach(item => {
+      const text = (item.textContent || item.innerText || '').trim().toLowerCase();
+      if (text === 'hoàn toàn không đồng ý' || text === 'hoàn toàn ko đồng ý') {
+        const isSelected = item.classList.contains('dx-list-item-selected') || item.getAttribute('aria-selected') === 'true';
+        if (!isSelected) {
+          const radio = item.querySelector('.dx-radiobutton') || item.querySelector('.dx-list-select-radiobutton') || item;
+          triggerClick(radio);
+          triggerClick(item);
+
+          const dxListEl = item.closest('.dx-list');
+          if (dxListEl) {
+            const listWidget = getDxWidgetInstance(dxListEl, 'dxList');
+            if (listWidget && typeof listWidget.selectItem === 'function') {
+              try { listWidget.selectItem(item); } catch (e) {}
+            }
+          }
+          count++;
+        }
+      }
+    });
+
+    const btn = document.getElementById('btnTamThanHTKDY');
+    if (btn) {
+      const originalBg = btn.style.background;
+      btn.style.background = '#16a34a';
+      btn.textContent = `✓ Đã chọn ${count} mục`;
+      setTimeout(() => {
+        btn.style.background = originalBg;
+        btn.textContent = 'Hoàn toàn không đồng ý';
+      }, 1800);
+    }
+  }
+
+  /* ==========================================================================
+     SECTION J: KẾT LUẬN (ĐỀ NGHỊ & TƯ VẤN) AUTOMATION
+     ========================================================================== */
+
+  const KET_LUAN_PHRASES = [
+    { key: 'noi', label: 'Nội', full: 'Khám CK Nội' },
+    { key: 'ngoai', label: 'Ngoại', full: 'Khám CK Ngoại' },
+    { key: 'mat', label: 'Mắt', full: 'Khám CK Mắt' },
+    { key: 'rhm', label: 'RHM', full: 'Khám CK Răng Hàm Mặt' },
+    { key: 'tmh', label: 'TMH', full: 'Khám CK Tai Mũi Họng' },
+    { key: 'thankinh', label: 'Thần kinh', full: 'Khám CK Tâm thần - vận động' },
+    { key: 'gaycoi', label: 'Gầy Còi', full: 'Bồi bổ thêm chất đạm, chất khoáng' },
+    { key: 'beophi', label: 'Béo Phì', full: 'Điều chỉnh chế độ ăn, tập thể dục' }
+  ];
+
+  function fillKetLuanDeNghi(selectedKeys) {
+    const container = document.querySelector('.KetLuan_DeNghi, [class*="KetLuan_DeNghi"]');
+    if (!container) return 0;
+
+    const phrasesToFill = KET_LUAN_PHRASES
+      .filter(p => selectedKeys.includes(p.key))
+      .map(p => p.full);
+
+    if (!phrasesToFill.length) return 0;
+
+    const htmlValue = phrasesToFill.map(p => `<p>${p}</p>`).join('');
+
+    const htmlEditorEl = container.querySelector('.dx-htmleditor') || container;
+    const inst = getDxWidgetInstance(htmlEditorEl, 'dxHtmlEditor');
+
+    if (inst) {
+      try {
+        inst.option('value', htmlValue);
+        return phrasesToFill.length;
+      } catch (e) {
+        console.warn('[Kết luận] dxHtmlEditor option set error:', e);
+      }
+    }
+
+    const qlEditor = container.querySelector('.ql-editor');
+    if (qlEditor) {
+      qlEditor.innerHTML = htmlValue;
+      qlEditor.dispatchEvent(new Event('input', { bubbles: true }));
+      qlEditor.dispatchEvent(new Event('change', { bubbles: true }));
+      return phrasesToFill.length;
+    }
+
+    const txtArea = container.querySelector('textarea, input');
+    if (txtArea) {
+      setTextBoxValue(container, phrasesToFill.join('\n'));
+      return phrasesToFill.length;
+    }
+
+    return 0;
+  }
+
+  function createKetLuanInputGroup() {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 4px; width: 190px; box-sizing: border-box;';
+
+    const header = document.createElement('div');
+    header.textContent = '📋 Đề nghị & Lời khuyên';
+    header.style.cssText = 'font-size: 12px; font-weight: 700; color: #334155;';
+
+    const selectedKeys = new Set();
+
+    const gridContainer = document.createElement('div');
+    gridContainer.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr; gap: 4px;';
+
+    KET_LUAN_PHRASES.forEach(p => {
+      const chip = document.createElement('button');
+      chip.textContent = p.label;
+      chip.style.cssText = 'padding: 5px 3px; font-size: 11px; font-weight: 600; border: 1px solid #cbd5e1; background: #ffffff; color: #334155; border-radius: 4px; cursor: pointer; transition: all 0.15s ease; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (selectedKeys.has(p.key)) {
+          selectedKeys.delete(p.key);
+          chip.style.background = '#ffffff';
+          chip.style.color = '#334155';
+          chip.style.borderColor = '#cbd5e1';
+        } else {
+          selectedKeys.add(p.key);
+          chip.style.background = '#2563eb';
+          chip.style.color = '#ffffff';
+          chip.style.borderColor = '#1d4ed8';
+        }
+      });
+
+      gridContainer.appendChild(chip);
+    });
+
+    const statusLabel = document.createElement('div');
+    statusLabel.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.textContent = '✓ Điền Đề Nghị';
+    confirmBtn.style.cssText = 'background: #059669; color: white; border: none; border-radius: 4px; font-size: 11.5px; padding: 6px 0; cursor: pointer; font-weight: 700; margin-top: 2px; width: 100%; transition: background 0.2s;';
+
+    confirmBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const keysArray = Array.from(selectedKeys);
+      if (!keysArray.length) {
+        statusLabel.textContent = '⚠ Chọn ít nhất 1 mục';
+        statusLabel.style.color = '#dc2626';
+        setTimeout(() => { statusLabel.textContent = ''; }, 2500);
+        return;
+      }
+
+      const count = fillKetLuanDeNghi(keysArray);
+      if (count > 0) {
+        statusLabel.textContent = `✓ Đã điền ${count} mục`;
+        statusLabel.style.color = '#16a34a';
+        confirmBtn.style.background = '#047857';
+        setTimeout(() => {
+          statusLabel.textContent = '';
+          confirmBtn.style.background = '#059669';
+        }, 2500);
+      } else {
+        statusLabel.textContent = '⚠ Không tìm thấy ô Đề nghị';
+        statusLabel.style.color = '#dc2626';
+        setTimeout(() => { statusLabel.textContent = ''; }, 2500);
+      }
+    });
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(gridContainer);
+    wrapper.appendChild(confirmBtn);
+    wrapper.appendChild(statusLabel);
+
+    wrapper.addEventListener('click', (e) => e.stopPropagation());
+
+    return wrapper;
+  }
+
+  function createRHMInputGroup() {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'display: flex; flex-direction: column; gap: 6px; padding: 10px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 4px; width: 280px; box-sizing: border-box;';
+
+    const header = document.createElement('div');
+    header.innerHTML = '<span style="font-size: 12px; font-weight: 700; color: #1e293b;">🦷 Sơ đồ răng (RHM Multi-Select)</span>';
+    header.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+
+    const selectedTeeth = new Set();
+    const toothButtons = {};
+
+    const quickBar = document.createElement('div');
+    quickBar.style.cssText = 'display: flex; gap: 3px; justify-content: space-between; margin-bottom: 2px;';
+
+    function makeQuickBtn(label, onClick) {
+      const qBtn = document.createElement('button');
+      qBtn.textContent = label;
+      qBtn.style.cssText = 'flex: 1; padding: 3px 2px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; border-radius: 4px; cursor: pointer; transition: all 0.15s; white-space: nowrap;';
+      qBtn.addEventListener('mouseenter', () => { qBtn.style.background = '#e2e8f0'; });
+      qBtn.addEventListener('mouseleave', () => { qBtn.style.background = '#f1f5f9'; });
+      qBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onClick();
+      });
+      return qBtn;
+    }
+
+    function updateUiSync() {
+      const input = document.getElementById('inputTeethRHM');
+      const sorted = Array.from(selectedTeeth);
+      if (input) {
+        input.value = sorted.join(', ');
+      }
+      ALL_TEETH.forEach(t => {
+        const btn = toothButtons[t];
+        if (btn) {
+          if (selectedTeeth.has(t)) {
+            btn.style.background = '#2563eb';
+            btn.style.color = '#ffffff';
+            btn.style.borderColor = '#1d4ed8';
+            btn.style.fontWeight = '700';
+          } else {
+            btn.style.background = '#ffffff';
+            btn.style.color = '#334155';
+            btn.style.borderColor = '#cbd5e1';
+            btn.style.fontWeight = '500';
+          }
+        }
+      });
+    }
+
+    quickBar.appendChild(makeQuickBtn('Hàm trên', () => {
+      TEETH_UPPER.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Hàm dưới', () => {
+      TEETH_LOWER.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Tất cả', () => {
+      ALL_TEETH.forEach(t => selectedTeeth.add(t));
+      updateUiSync();
+    }));
+    quickBar.appendChild(makeQuickBtn('Bỏ chọn', () => {
+      selectedTeeth.clear();
+      updateUiSync();
+    }));
+
+    const matrixContainer = document.createElement('div');
+    matrixContainer.style.cssText = 'display: flex; flex-direction: column; gap: 4px; background: #ffffff; padding: 6px; border-radius: 6px; border: 1px solid #e2e8f0;';
+
+    function renderJawRow(teethList, jawLabel) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display: flex; flex-direction: column; gap: 2px;';
+
+      const label = document.createElement('div');
+      label.textContent = jawLabel;
+      label.style.cssText = 'font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 1px;';
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr) 2px repeat(8, 1fr); gap: 2px; align-items: center;';
+
+      teethList.forEach((t, i) => {
+        if (i === 8) {
+          const sep = document.createElement('div');
+          sep.style.cssText = 'background: #cbd5e1; height: 100%; width: 2px;';
+          grid.appendChild(sep);
+        }
+
+        const tBtn = document.createElement('button');
+        tBtn.textContent = t;
+        tBtn.style.cssText = 'padding: 3px 0; font-size: 9px; font-weight: 500; background: #ffffff; color: #334155; border: 1px solid #cbd5e1; border-radius: 3px; cursor: pointer; text-align: center; line-height: 1; transition: all 0.1s;';
+
+        tBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (selectedTeeth.has(t)) {
+            selectedTeeth.delete(t);
+          } else {
+            selectedTeeth.add(t);
+          }
+          updateUiSync();
+        });
+
+        toothButtons[t] = tBtn;
+        grid.appendChild(tBtn);
+      });
+
+      row.appendChild(label);
+      row.appendChild(grid);
+      return row;
+    }
+
+    matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
+    matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
+
+    const input = document.createElement('input');
+    input.id = 'inputTeethRHM';
+    input.type = 'text';
+    input.placeholder = 'Răng đã chọn: 18, 17, 26...';
+    input.style.cssText = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; outline: none; width: 100%; box-sizing: border-box; background: #fff; font-family: monospace;';
+
+    input.addEventListener('input', () => {
+      const raw = input.value;
+      selectedTeeth.clear();
+      raw.split(',').map(s => s.trim()).filter(s => s.length > 0).forEach(t => {
+        if (ALL_TEETH.includes(t)) selectedTeeth.add(t);
+      });
+      ALL_TEETH.forEach(t => {
+        const btn = toothButtons[t];
+        if (btn) {
+          if (selectedTeeth.has(t)) {
+            btn.style.background = '#2563eb';
+            btn.style.color = '#ffffff';
+            btn.style.borderColor = '#1d4ed8';
+            btn.style.fontWeight = '700';
+          } else {
+            btn.style.background = '#ffffff';
+            btn.style.color = '#334155';
+            btn.style.borderColor = '#cbd5e1';
+            btn.style.fontWeight = '500';
+          }
+        }
+      });
+    });
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation());
+
+    function makeStatusBtn(text, color, statusId, label) {
+      const btn = document.createElement('button');
+      btn.textContent = text;
+      btn.title = label || text;
+      btn.style.cssText = `flex: 1; background: ${color}; color: white; border: none; border-radius: 4px; font-size: 10.5px; padding: 5px 2px; cursor: pointer; font-weight: 700; transition: opacity 0.15s; white-space: nowrap; text-align: center;`;
+      btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.85'; });
+      btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const list = Array.from(selectedTeeth);
+        processTeethInput(statusId, list.length > 0 ? list : null);
+      });
+      return btn;
+    }
+
+    const btnRow1 = document.createElement('div');
+    btnRow1.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
+    btnRow1.appendChild(makeStatusBtn('🔴 Sâu', '#ea580c', '192', 'Sâu răng'));
+    btnRow1.appendChild(makeStatusBtn('⚫ Mất', '#dc2626', '195', 'Mất do sâu'));
+    btnRow1.appendChild(makeStatusBtn('🟣 Trám tốt', '#7c3aed', '194', 'Trám tốt'));
+    btnRow1.appendChild(makeStatusBtn('🟣 Trám lại', '#9333ea', '193', 'Trám sâu lại'));
+
+    const btnRow2 = document.createElement('div');
+    btnRow2.style.cssText = 'display: flex; gap: 3px; justify-content: space-between;';
+    btnRow2.appendChild(makeStatusBtn('🟡 Mất khác', '#d97706', '196', 'Mất lý do khác'));
+    btnRow2.appendChild(makeStatusBtn('🔘 Bít rãnh', '#0891b2', '197', 'Bít hố rãnh'));
+    btnRow2.appendChild(makeStatusBtn('🔵 Implant', '#2563eb', '198', 'Trụ, cầu, implant'));
+    btnRow2.appendChild(makeStatusBtn('🟢 Bình thường', '#059669', '191', 'Bình thường'));
+
+    const status = document.createElement('div');
+    status.id = 'rhmStatusLabel';
+    status.style.cssText = 'font-size: 11px; font-weight: 600; text-align: center; height: 14px;';
+
+    wrapper.appendChild(header);
+    wrapper.appendChild(quickBar);
+    wrapper.appendChild(matrixContainer);
+    wrapper.appendChild(input);
+    wrapper.appendChild(btnRow1);
+    wrapper.appendChild(btnRow2);
+    wrapper.appendChild(status);
+
+    wrapper.addEventListener('click', (e) => e.stopPropagation());
+
+    return wrapper;
+  }
+
+  /* ==========================================================================
+     UI BUTTON BAR INJECTION
+     ========================================================================== */
+
+  function injectButtons() {
+    if (document.getElementById('automationPanel')) return;
+    if (!document.body) return;
+
+    const container = document.createElement('div');
+    container.id = 'automationPanel';
+    container.style.cssText = [
+      'position: fixed',
+      'top: 12px',
+      'right: 15px',
+      'z-index: 999999',
+      'font-family: system-ui, -apple-system, sans-serif'
+    ].join(';');
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.textContent = '⚙️ SKCD Tools';
+    toggleBtn.style.cssText = [
+      'background: #3b82f6',
+      'color: #ffffff',
+      'border: none',
+      'border-radius: 6px',
+      'padding: 8px 14px',
+      'font-size: 13px',
+      'font-weight: 600',
+      'cursor: pointer',
+      'box-shadow: 0 4px 12px rgba(0,0,0,0.25)',
+      'transition: all 0.2s ease-in-out',
+      'white-space: nowrap'
+    ].join(';');
+
+    const dropdown = document.createElement('div');
+    dropdown.style.cssText = [
+      'display: none',
+      'position: absolute',
+      'top: 115%',
+      'right: 0',
+      'background: rgba(255, 255, 255, 0.95)',
+      'backdrop-filter: blur(8px)',
+      'padding: 10px',
+      'border-radius: 8px',
+      'box-shadow: 0 4px 15px rgba(0,0,0,0.18)',
+      'border: 1px solid rgba(148, 163, 184, 0.3)',
+      'flex-direction: column',
+      'gap: 8px',
+      'min-width: 160px'
+    ].join(';');
+
+    toggleBtn.addEventListener('click', () => {
+      dropdown.style.display = dropdown.style.display === 'none' ? 'flex' : 'none';
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!container.contains(e.target)) {
+        dropdown.style.display = 'none';
+      }
+    });
+
+    function createBtn(id, text, bg, onClick) {
+      const btn = document.createElement('button');
+      btn.id = id;
+      btn.textContent = text;
+      btn.style.cssText = [
+        `background: ${bg}`,
+        'color: #ffffff',
+        'border: none',
+        'border-radius: 6px',
+        'padding: 8px 14px',
+        'font-size: 13px',
+        'font-weight: 600',
+        'cursor: pointer',
+        'box-shadow: 0 2px 6px rgba(0,0,0,0.15)',
+        'transition: all 0.2s ease-in-out',
+        'white-space: nowrap',
+        'width: 100%',
+        'text-align: left'
+      ].join(';');
+
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'translateX(-2px)';
+        btn.style.boxShadow = '0 4px 10px rgba(0,0,0,0.25)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'translateX(0)';
+        btn.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+      });
+
+      btn.addEventListener('click', (e) => {
+        onClick(e);
+        setTimeout(() => { dropdown.style.display = 'none'; }, 2500);
+      });
+      return btn;
+    }
+
+    function createSubMenu(text, color) {
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'position: relative; width: 100%;';
+
+      const btn = document.createElement('button');
+      btn.innerHTML = `<span>${text}</span> <span>◀</span>`;
+      btn.style.cssText = [
+        `background: ${color}`,
+        'color: #ffffff',
+        'border: none',
+        'border-radius: 6px',
+        'padding: 8px 14px',
+        'font-size: 13px',
+        'font-weight: 600',
+        'cursor: pointer',
+        'box-shadow: 0 2px 6px rgba(0,0,0,0.15)',
+        'transition: all 0.2s ease-in-out',
+        'white-space: nowrap',
+        'width: 100%',
+        'text-align: left',
+        'display: flex',
+        'justify-content: space-between',
+        'align-items: center'
+      ].join(';');
+
+      const subDropdown = document.createElement('div');
+      subDropdown.style.cssText = [
+        'display: none',
+        'position: absolute',
+        'right: 100%',
+        'top: 0',
+        'padding-right: 10px',
+        'z-index: 10'
+      ].join(';');
+
+      const subDropdownInner = document.createElement('div');
+      subDropdownInner.style.cssText = [
+        'background: rgba(255, 255, 255, 0.95)',
+        'backdrop-filter: blur(8px)',
+        'padding: 10px',
+        'border-radius: 8px',
+        'box-shadow: 0 4px 15px rgba(0,0,0,0.18)',
+        'border: 1px solid rgba(148, 163, 184, 0.3)',
+        'display: flex',
+        'flex-direction: column',
+        'gap: 8px',
+        'min-width: 160px'
+      ].join(';');
+
+      subDropdown.appendChild(subDropdownInner);
+
+      let hideTimer = null;
+
+      const openSubMenu = () => {
+        if (hideTimer) {
+          clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+        subDropdown.style.display = 'block';
+        btn.style.transform = 'translateX(-2px)';
+        btn.style.boxShadow = '0 4px 10px rgba(0,0,0,0.25)';
+      };
+
+      const closeSubMenu = () => {
+        if (hideTimer) clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+          subDropdown.style.display = 'none';
+          btn.style.transform = 'translateX(0)';
+          btn.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)';
+        }, 300);
+      };
+
+      wrapper.addEventListener('mouseenter', openSubMenu);
+      wrapper.addEventListener('mouseleave', closeSubMenu);
+      subDropdown.addEventListener('mouseenter', openSubMenu);
+      subDropdown.addEventListener('mouseleave', closeSubMenu);
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (subDropdown.style.display === 'block') {
+          subDropdown.style.display = 'none';
+        } else {
+          openSubMenu();
+        }
+      });
+
+      wrapper.appendChild(btn);
+      wrapper.appendChild(subDropdown);
+
+      return { wrapper, subDropdown: subDropdownInner };
+    }
+
+    // 0. Hành chính Sub-menu
+    const menuHanhChinh = createSubMenu('Hành chính', '#8b5cf6');
+    const btnHanhChinhTreEm = createBtn('btnHanhChinhTreEm', '👶 Trẻ em', '#8b5cf6', fillHanhChinh);
+    const btnHanhChinhNCT = createBtn('btnHanhChinhNCT', '🧓 Người Cao Tuổi', '#7c3aed', showHanhChinhNCTModal);
+    const btnHanhChinhHSCNGH = createBtn('btnHanhChinhHSCNGH', '🎓 Học Sinh Có Người Giám Hộ', '#2563eb', showHocSinhGiamHoModal);
+    const btnHanhChinhNguoiLon = createBtn('btnHanhChinhNguoiLon', '🧑 Người Lớn (>= 18t)', '#0284c7', showNguoiLonModal);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhTreEm);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhNCT);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhHSCNGH);
+    menuHanhChinh.subDropdown.appendChild(btnHanhChinhNguoiLon);
+    dropdown.appendChild(menuHanhChinh.wrapper);
+
+    // 1. Khám Lâm sàng Sub-menu
+    const menuKhamLamSang = createSubMenu('Khám Lâm sàng', '#0f766e');
+    const btnFillAll = createBtn('fillAllBtn', 'Fill all', '#059669', fillAll);
+    const btnTai = createBtn('btnTai', 'Tai', '#0284c7', fillTaiHearing);
+    const btnRang = createBtn('btnRang', 'Răng', '#0d9488', fillRang);
+    menuKhamLamSang.subDropdown.appendChild(btnFillAll);
+    menuKhamLamSang.subDropdown.appendChild(btnTai);
+    menuKhamLamSang.subDropdown.appendChild(btnRang);
+    dropdown.appendChild(menuKhamLamSang.wrapper);
+
+    // 2. Vaccine Sub-menu
+    const menuVaccine = createSubMenu('Vaccine', '#0369a1');
+    const btnDaTiem = createBtn('btnDaTiem', 'Đã tiêm (Vaccine)', '#2563eb', () => handleVaccineClick('btnDaTiem', 'Đã tiêm (Vaccine)', /^đã\s*tiêm/i));
+    const btnChuaTiem = createBtn('btnChuaTiem', 'Chưa tiêm (Vaccine)', '#d97706', () => handleVaccineClick('btnChuaTiem', 'Chưa tiêm (Vaccine)', /^chưa\s*tiêm/i));
+    const btnKhongNhoRo = createBtn('btnKhongNhoRo', 'Không nhớ (Vaccine)', '#4b5563', () => handleVaccineClick('btnKhongNhoRo', 'Không nhớ (Vaccine)', /^không\s*nhớ\s*rõ/i));
+    menuVaccine.subDropdown.appendChild(btnDaTiem);
+    menuVaccine.subDropdown.appendChild(btnChuaTiem);
+    menuVaccine.subDropdown.appendChild(btnKhongNhoRo);
+    dropdown.appendChild(menuVaccine.wrapper);
+
+    // 3. Không (Tiền sử) Sub-menu
+    const menuKhong = createSubMenu('Không', '#be123c');
+    const btnKhongTienSu = createBtn('btnKhongTienSu', 'Không (tiền sử)', '#dc2626', massSelectKhongTienSu);
+    const btnHauNhuKhong = createBtn('btnHauNhuKhong', 'Hầu Như Không', '#8b5cf6', massSelectHauNhuKhong);
+    const btnCoD8 = createBtn('btnCoD8', 'Có D8', '#ea580c', massSelectCoD8);
+    menuKhong.subDropdown.appendChild(btnKhongTienSu);
+    menuKhong.subDropdown.appendChild(btnHauNhuKhong);
+    menuKhong.subDropdown.appendChild(btnCoD8);
+    dropdown.appendChild(menuKhong.wrapper);
+
+    // 4. Răng (RHM UI) Sub-menu
+    const menuRHM = createSubMenu('Răng', '#b45309');
+    menuRHM.subDropdown.appendChild(createRHMInputGroup());
+    dropdown.appendChild(menuRHM.wrapper);
+
+    // 5. Tâm thần - trẻ em Sub-menu
+    const menuTamThan = createSubMenu('Tâm thần - trẻ em', '#9333ea');
+    const btnTamThanKhongCo = createBtn('btnTamThanKhongCo', 'Không có', '#be123c', massSelectTamThanKhongCo);
+    const btnTamThanHTKDY = createBtn('btnTamThanHTKDY', 'Hoàn toàn không đồng ý', '#0f766e', massSelectTamThanHTKDY);
+    menuTamThan.subDropdown.appendChild(btnTamThanKhongCo);
+    menuTamThan.subDropdown.appendChild(btnTamThanHTKDY);
+    dropdown.appendChild(menuTamThan.wrapper);
+
+    // 6. Kết Luận Sub-menu
+    const menuKetLuan = createSubMenu('Kết Luận', '#059669');
+    menuKetLuan.subDropdown.appendChild(createKetLuanInputGroup());
+    dropdown.appendChild(menuKetLuan.wrapper);
+
+    // 7. Xét nghiệm máu (Standalone button)
+    const btnXetNghiemMau = createBtn('btnXetNghiemMau', '🧪 Xét nghiệm máu', '#0284c7', showBloodTestModal);
+    dropdown.appendChild(btnXetNghiemMau);
+
+    container.appendChild(toggleBtn);
+    container.appendChild(dropdown);
+
+    document.body.appendChild(container);
+  }
+
+  setInterval(injectButtons, 1000);
+})();
