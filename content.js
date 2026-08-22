@@ -1832,7 +1832,11 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
 
   const TEETH_UPPER = ['18','17','16','15','14','13','12','11','21','22','23','24','25','26','27','28'];
   const TEETH_LOWER = ['48','47','46','45','44','43','42','41','31','32','33','34','35','36','37','38'];
-  const ALL_TEETH = [...TEETH_UPPER, ...TEETH_LOWER];
+  const TEETH_BABY_UPPER = ['55','54','53','52','51','61','62','63','64','65'];
+  const TEETH_BABY_LOWER = ['85','84','83','82','81','71','72','73','74','75'];
+  const ALL_TEETH_BABY = [...TEETH_BABY_UPPER, ...TEETH_BABY_LOWER];
+  const ALL_TEETH_ADULT = [...TEETH_UPPER, ...TEETH_LOWER];
+  const ALL_TEETH = [...ALL_TEETH_ADULT, ...ALL_TEETH_BABY];
 
   const RHM_STATUS_CODES = {
     'binhthuong': '191',
@@ -1961,7 +1965,8 @@ Chỉ trả về JSON thuần túy theo mẫu sau, không thêm bất kỳ lời
       const label = field.querySelector('.dx-field-item-label-text');
       if (label) {
         const labelText = label.textContent.trim().toLowerCase();
-        if (labelText === tStr || labelText === `răng ${tStr}` || labelText === `răng số ${tStr}` || labelText.includes(` ${tStr}`)) {
+        const toothRegex = new RegExp(`(?:^|\\b|\\s)răng(?:\\ssố)?\\s*${tStr}\\b`, 'i');
+        if (labelText === tStr || toothRegex.test(labelText)) {
           const widgetEl = field.querySelector('.dx-selectbox, .dx-tagbox');
           if (widgetEl) {
             const inst = getDxWidgetInstance(widgetEl, widgetEl.classList.contains('dx-tagbox') ? 'dxTagBox' : 'dxSelectBox');
@@ -2640,12 +2645,12 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       });
     }
 
-    quickBar.appendChild(makeQuickBtn('Hàm trên', () => {
-      TEETH_UPPER.forEach(t => selectedTeeth.add(t));
+    quickBar.appendChild(makeQuickBtn('Vĩnh viễn', () => {
+      ALL_TEETH_ADULT.forEach(t => selectedTeeth.add(t));
       updateUiSync();
     }));
-    quickBar.appendChild(makeQuickBtn('Hàm dưới', () => {
-      TEETH_LOWER.forEach(t => selectedTeeth.add(t));
+    quickBar.appendChild(makeQuickBtn('Răng sữa', () => {
+      ALL_TEETH_BABY.forEach(t => selectedTeeth.add(t));
       updateUiSync();
     }));
     quickBar.appendChild(makeQuickBtn('Tất cả', () => {
@@ -2669,10 +2674,12 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       label.style.cssText = 'font-size: 10px; font-weight: 700; color: #64748b; margin-bottom: 1px;';
 
       const grid = document.createElement('div');
-      grid.style.cssText = 'display: grid; grid-template-columns: repeat(8, 1fr) 2px repeat(8, 1fr); gap: 2px; align-items: center;';
+      const mid = Math.floor(teethList.length / 2);
+      const cols = mid;
+      grid.style.cssText = `display: grid; grid-template-columns: repeat(${cols}, 1fr) 2px repeat(${cols}, 1fr); gap: 2px; align-items: center;`;
 
       teethList.forEach((t, i) => {
-        if (i === 8) {
+        if (i === mid) {
           const sep = document.createElement('div');
           sep.style.cssText = 'background: #cbd5e1; height: 100%; width: 2px;';
           grid.appendChild(sep);
@@ -2701,13 +2708,15 @@ Chỉ trả về JSON thuần túy, không thêm lời giải thích.`;
       return row;
     }
 
-    matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên:'));
-    matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới:'));
+    matrixContainer.appendChild(renderJawRow(TEETH_UPPER, '▲ Hàm trên (Vĩnh viễn):'));
+    matrixContainer.appendChild(renderJawRow(TEETH_BABY_UPPER, '▲ Hàm trên (Sữa):'));
+    matrixContainer.appendChild(renderJawRow(TEETH_BABY_LOWER, '▼ Hàm dưới (Sữa):'));
+    matrixContainer.appendChild(renderJawRow(TEETH_LOWER, '▼ Hàm dưới (Vĩnh viễn):'));
 
     const input = document.createElement('input');
     input.id = 'inputTeethRHM';
     input.type = 'text';
-    input.placeholder = 'Răng đã chọn: 18, 17, 26...';
+    input.placeholder = 'Răng đã chọn: 18, 55, 51, 61...';
     input.style.cssText = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 11px; outline: none; width: 100%; box-sizing: border-box; background: #fff; font-family: monospace;';
 
     input.addEventListener('input', () => {
